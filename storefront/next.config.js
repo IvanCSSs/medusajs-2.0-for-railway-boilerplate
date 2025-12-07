@@ -7,7 +7,6 @@ checkEnvVariables()
  */
 const nextConfig = {
   reactStrictMode: true,
-  output: 'standalone',
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -15,7 +14,6 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   images: {
-    unoptimized: true, // Temporary: bypass image optimization to test direct image loading
     remotePatterns: [
       {
         protocol: "http",
