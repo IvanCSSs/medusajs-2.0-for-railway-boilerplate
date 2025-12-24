@@ -1,9 +1,9 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
-import { EMAIL_TEMPLATES_MODULE } from "../../../../../modules/email-templates"
+import { EMAIL_TEMPLATES_MODULE, EmailTemplateService } from "../../../../../modules/email-templates"
 
 // POST /admin/email-templates/:id/preview - Preview a template with sample data
 export async function POST(req: MedusaRequest, res: MedusaResponse) {
-  const emailTemplateService = req.scope.resolve(EMAIL_TEMPLATES_MODULE)
+  const emailTemplateService = req.scope.resolve<EmailTemplateService>(EMAIL_TEMPLATES_MODULE)
   const { id } = req.params
   const { variables } = req.body as { variables?: Record<string, any> }
 

@@ -66,7 +66,7 @@ export class ResendNotificationService extends AbstractNotificationProviderServi
   /**
    * Try to get template from database first
    */
-  private async getDbTemplate(templateName: string, eventName?: string): Promise<{ subject: string; html: string } | null> {
+  private async getDbTemplate(_templateName: string, eventName?: string): Promise<{ subject: string; html: string } | null> {
     if (!this.emailTemplatesService_) return null
 
     try {
@@ -100,7 +100,7 @@ export class ResendNotificationService extends AbstractNotificationProviderServi
       throw new MedusaError(MedusaError.Types.INVALID_DATA, `SMS notification not supported`)
     }
 
-    const emailOptions = notification.data?.emailOptions as NotificationEmailOptions || {}
+    const emailOptions = (notification.data?.emailOptions || {}) as NotificationEmailOptions
     let message: CreateEmailOptions
 
     // First, check if there's a database template for this event
