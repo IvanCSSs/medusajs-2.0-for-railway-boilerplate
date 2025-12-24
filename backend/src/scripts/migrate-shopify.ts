@@ -18,7 +18,7 @@ const shopifyProducts = [
         weight: 74,
       }
     ],
-    tags: ["Kratom", "YUM", "Bundle"],
+    category: "Bundle",
   },
   {
     title: "333 - Bubble Gum + Tropical Breeze YUM Holiday Bundle (6 Units)",
@@ -36,7 +36,7 @@ const shopifyProducts = [
         manage_inventory: false,
       }
     ],
-    tags: ["Kratom", "YUM", "Bundle", "Holiday"],
+    category: "Bundle",
   },
   {
     title: "333 - Tropical Breeze YUM 30ml Twins",
@@ -51,7 +51,7 @@ const shopifyProducts = [
         manage_inventory: false,
       }
     ],
-    tags: ["Kratom", "YUM", "Tropical Breeze"],
+    category: "Tropical Breeze",
   },
   {
     title: "333 - TWINS YUM Delicious Kratom Extract - Bubble Gum 30ml",
@@ -66,7 +66,7 @@ const shopifyProducts = [
         manage_inventory: false,
       }
     ],
-    tags: ["Kratom", "YUM", "Bubble Gum"],
+    category: "Bubble Gum",
   },
   {
     title: "333 - YUM Delicious Kratom Extract - Bubble Gum 30ml",
@@ -92,7 +92,7 @@ const shopifyProducts = [
         weight: 37,
       }
     ],
-    tags: ["Kratom", "YUM", "Bubble Gum"],
+    category: "Bubble Gum",
   },
   {
     title: "Triple Play - YUM Delicious Kratom Extract - Bubble Gum 30ml",
@@ -111,7 +111,7 @@ const shopifyProducts = [
         weight: 111,
       }
     ],
-    tags: ["Kratom", "YUM", "Bubble Gum", "Triple Play"],
+    category: "Bubble Gum",
   },
   {
     title: "Triple Play - YUM Tropical Breeze 30ml Delicious Kratom Extract",
@@ -130,7 +130,7 @@ const shopifyProducts = [
         weight: 111,
       }
     ],
-    tags: ["Kratom", "YUM", "Tropical Breeze", "Triple Play"],
+    category: "Tropical Breeze",
   },
 ]
 
@@ -164,10 +164,10 @@ export default async function migrateShopify({ container }: ExecArgs) {
     logger.info("Updating store settings...")
     const stores = await storeService.listStores()
     if (stores.length > 0) {
-      await storeService.updateStores(stores[0].id, {
+      await storeService.updateStores({
+        id: stores[0].id,
         name: storeSettings.name,
-        default_currency_code: storeSettings.currency.toLowerCase(),
-      })
+      } as any)
       logger.info(`Store updated: ${storeSettings.name}`)
     }
 
@@ -181,8 +181,8 @@ export default async function migrateShopify({ container }: ExecArgs) {
         name: "United States",
         currency_code: "usd",
         countries: ["us"],
-      })
-      usdRegion = created
+      } as any)
+      usdRegion = Array.isArray(created) ? created[0] : created
       logger.info("Created USD region for United States")
     } else {
       logger.info(`Using existing region: ${usdRegion.name}`)
@@ -197,8 +197,8 @@ export default async function migrateShopify({ container }: ExecArgs) {
       const created = await productService.createProductCollections({
         title: "YUM Kratom Extracts",
         handle: "yum-kratom",
-      })
-      yumCollection = created
+      } as any)
+      yumCollection = Array.isArray(created) ? created[0] : created
       logger.info("Created YUM Kratom collection")
     }
 
@@ -214,14 +214,13 @@ export default async function migrateShopify({ container }: ExecArgs) {
         continue
       }
 
-      // Create the product
+      // Create the product with Medusa 2.0 API
       const createdProduct = await productService.createProducts({
         title: product.title,
         handle: product.handle,
         description: product.description,
         status: "published",
         images: product.images.map((url, i) => ({ url, rank: i })),
-        tags: product.tags.map(t => ({ value: t })),
         collection_id: yumCollection?.id,
         options: [
           {
@@ -240,7 +239,7 @@ export default async function migrateShopify({ container }: ExecArgs) {
             Size: "Default",
           }
         })),
-      })
+      } as any)
 
       logger.info(`Created product: ${product.title}`)
     }
