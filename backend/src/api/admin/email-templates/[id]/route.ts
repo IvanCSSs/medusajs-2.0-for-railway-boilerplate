@@ -21,17 +21,20 @@ export async function PUT(req: MedusaRequest, res: MedusaResponse) {
   const { name, subject, description, event_name, html_content, is_active, variables } = req.body as any
 
   try {
-    const template = await emailTemplateService.updateEmailTemplates(id, {
-      ...(name && { name }),
-      ...(subject && { subject }),
-      ...(description !== undefined && { description }),
-      ...(event_name && { event_name }),
-      ...(html_content && { html_content }),
-      ...(is_active !== undefined && { is_active }),
-      ...(variables && { variables }),
+    const template = await emailTemplateService.updateEmailTemplates({
+      selector: { id },
+      data: {
+        ...(name && { name }),
+        ...(subject && { subject }),
+        ...(description !== undefined && { description }),
+        ...(event_name && { event_name }),
+        ...(html_content && { html_content }),
+        ...(is_active !== undefined && { is_active }),
+        ...(variables && { variables }),
+      },
     })
 
-    return res.json({ template })
+    return res.json({ template: template[0] })
   } catch (error) {
     return res.status(404).json({ message: "Template not found" })
   }
