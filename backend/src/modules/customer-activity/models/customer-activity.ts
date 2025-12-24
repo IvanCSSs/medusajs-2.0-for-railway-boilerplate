@@ -7,5 +7,5 @@ export const CustomerActivity = model.define("customer_activity", {
   event_name: model.text(), // Human readable: "Placed order #1082", "Started checkout", etc.
   description: model.text().nullable(), // Additional details
   metadata: model.json().nullable(), // Store order_id, cart_id, email_type, etc.
-  created_at: model.dateTime().default(() => new Date()),
+  // Note: created_at, updated_at, deleted_at are automatically added by Medusa
 })
