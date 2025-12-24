@@ -99,10 +99,11 @@ export default async function configureStore({ container }: ExecArgs) {
 
     if (!shippingFulfillmentSet) {
       // Create fulfillment set for shipping
-      shippingFulfillmentSet = await fulfillmentService.createFulfillmentSets({
+      const created = await fulfillmentService.createFulfillmentSets({
         name: "Shipping",
         type: "shipping",
       } as any)
+      shippingFulfillmentSet = Array.isArray(created) ? created[0] : created
       logger.info("Created Shipping fulfillment set")
     }
 
@@ -112,7 +113,7 @@ export default async function configureStore({ container }: ExecArgs) {
 
     if (!usZone) {
       // Create service zone for US
-      usZone = await fulfillmentService.createServiceZones({
+      const createdZone = await fulfillmentService.createServiceZones({
         name: "United States",
         fulfillment_set_id: shippingFulfillmentSet.id,
         geo_zones: [{
@@ -120,6 +121,7 @@ export default async function configureStore({ container }: ExecArgs) {
           country_code: "us",
         }],
       } as any)
+      usZone = Array.isArray(createdZone) ? createdZone[0] : createdZone
       logger.info("Created United States service zone")
     }
 

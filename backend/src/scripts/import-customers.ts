@@ -91,7 +91,8 @@ export default async function importCustomers({ container }: ExecArgs) {
         const createdCustomers = await customerService.listCustomers({ email: customer.email })
         if (createdCustomers.length > 0) {
           for (const addr of customer.addresses) {
-            await customerService.createCustomerAddresses(createdCustomers[0].id, {
+            await customerService.createCustomerAddresses({
+              customer_id: createdCustomers[0].id,
               first_name: addr.first_name || customer.first_name || "",
               last_name: addr.last_name || customer.last_name || "",
               company: addr.company || undefined,
