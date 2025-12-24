@@ -1,5 +1,4 @@
 import { defineRouteConfig } from "@medusajs/admin-sdk"
-import { ShoppingCart } from "@medusajs/icons"
 import { Container, Heading, Table, Text, Badge, Button } from "@medusajs/ui"
 import { useEffect, useState } from "react"
 
@@ -115,7 +114,7 @@ const AbandonedCartsPage = () => {
           </div>
         ) : carts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10">
-            <ShoppingCart className="text-ui-fg-muted mb-2 h-10 w-10" />
+            <Text className="text-ui-fg-muted text-3xl mb-2">&#128722;</Text>
             <Text className="text-ui-fg-muted">No abandoned carts found</Text>
           </div>
         ) : (
@@ -170,7 +169,6 @@ const AbandonedCartsPage = () => {
 
 export const config = defineRouteConfig({
   label: "Abandoned Carts",
-  icon: ShoppingCart,
 })
 
 export default AbandonedCartsPage

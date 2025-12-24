@@ -1,17 +1,6 @@
 import { defineWidgetConfig } from "@medusajs/admin-sdk"
 import { DetailWidgetProps, AdminCustomer } from "@medusajs/framework/types"
-import { Container, Heading, Text, Badge, clx } from "@medusajs/ui"
-import {
-  ShoppingCart,
-  CurrencyDollar,
-  User,
-  EnvelopeSolid,
-  XCircle,
-  CheckCircle,
-  ArrowPath,
-  TruckFast,
-  ReceiptPercent
-} from "@medusajs/icons"
+import { Container, Heading, Text, Badge } from "@medusajs/ui"
 import { useEffect, useState } from "react"
 
 type Activity = {
@@ -27,34 +16,32 @@ type Activity = {
 
 type GroupedActivities = Record<string, Activity[]>
 
-// Icon mapping for different event types
+// Icon mapping for different event types (using text symbols)
 const getEventIcon = (eventType: string) => {
-  const iconClass = "h-4 w-4"
-
   switch (eventType) {
     case "order.placed":
-      return <CurrencyDollar className={clx(iconClass, "text-green-500")} />
+      return <span className="text-green-500">$</span>
     case "order.canceled":
-      return <XCircle className={clx(iconClass, "text-red-500")} />
+      return <span className="text-red-500">&#10005;</span>
     case "order.completed":
-      return <CheckCircle className={clx(iconClass, "text-green-600")} />
+      return <span className="text-green-600">&#10003;</span>
     case "customer.created":
-      return <User className={clx(iconClass, "text-blue-500")} />
+      return <span className="text-blue-500">&#128100;</span>
     case "customer.updated":
-      return <ArrowPath className={clx(iconClass, "text-gray-500")} />
+      return <span className="text-gray-500">&#8635;</span>
     case "cart.created":
     case "cart.updated":
-      return <ShoppingCart className={clx(iconClass, "text-orange-500")} />
+      return <span className="text-orange-500">&#128722;</span>
     case "fulfillment.created":
     case "fulfillment.shipment_created":
-      return <TruckFast className={clx(iconClass, "text-purple-500")} />
+      return <span className="text-purple-500">&#128666;</span>
     case "notification.sent":
-      return <EnvelopeSolid className={clx(iconClass, "text-blue-400")} />
+      return <span className="text-blue-400">&#9993;</span>
     case "return.created":
     case "claim.created":
-      return <ReceiptPercent className={clx(iconClass, "text-yellow-500")} />
+      return <span className="text-yellow-500">&#8617;</span>
     default:
-      return <CheckCircle className={clx(iconClass, "text-gray-400")} />
+      return <span className="text-gray-400">&#8226;</span>
   }
 }
 
@@ -145,7 +132,7 @@ const CustomerTimelineWidget = ({ data }: DetailWidgetProps<AdminCustomer>) => {
       <div className="px-6 py-4 max-h-[500px] overflow-y-auto">
         {dateKeys.length === 0 ? (
           <div className="text-center py-8">
-            <User className="h-8 w-8 text-ui-fg-muted mx-auto mb-2" />
+            <Text className="text-ui-fg-muted text-2xl mb-2">&#128100;</Text>
             <Text className="text-ui-fg-subtle">No activity recorded yet</Text>
           </div>
         ) : (
@@ -161,7 +148,7 @@ const CustomerTimelineWidget = ({ data }: DetailWidgetProps<AdminCustomer>) => {
                       key={activity.id}
                       className="flex items-start gap-3 p-3 rounded-lg bg-ui-bg-subtle hover:bg-ui-bg-subtle-hover transition-colors"
                     >
-                      <div className="flex-shrink-0 mt-0.5">
+                      <div className="flex-shrink-0 mt-0.5 text-base">
                         {getEventIcon(activity.event_type)}
                       </div>
                       <div className="flex-grow min-w-0">
