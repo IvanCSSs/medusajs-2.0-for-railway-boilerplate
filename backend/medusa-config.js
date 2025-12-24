@@ -1,4 +1,5 @@
 import { loadEnv, Modules, defineConfig } from '@medusajs/utils';
+import { CUSTOMER_ACTIVITY_MODULE } from './src/modules/customer-activity';
 import {
   ADMIN_CORS,
   AUTH_CORS,
@@ -132,7 +133,11 @@ const medusaConfig = {
           },
         ],
       },
-    }] : [])
+    }] : []),
+    // Customer Activity Timeline Module
+    {
+      resolve: './src/modules/customer-activity',
+    },
   ],
   plugins: [
   ...(MEILISEARCH_HOST && MEILISEARCH_ADMIN_KEY ? [{
