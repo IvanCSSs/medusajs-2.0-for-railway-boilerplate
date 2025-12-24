@@ -2,7 +2,6 @@ import { defineRouteConfig } from "@medusajs/admin-sdk"
 import { EnvelopeSolid, PlusMini, PencilSquare, Trash } from "@medusajs/icons"
 import { Container, Heading, Table, Text, Badge, Button, toast, Toaster } from "@medusajs/ui"
 import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
 
 type EmailTemplate = {
   id: string
@@ -15,10 +14,13 @@ type EmailTemplate = {
   updated_at: string
 }
 
+const navigateTo = (path: string) => {
+  window.location.href = `/app${path}`
+}
+
 const EmailTemplatesPage = () => {
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
   const [loading, setLoading] = useState(true)
-  const navigate = useNavigate()
 
   const fetchTemplates = async () => {
     setLoading(true)
@@ -75,7 +77,7 @@ const EmailTemplatesPage = () => {
               Create and manage transactional email templates
             </Text>
           </div>
-          <Button onClick={() => navigate("/email-templates/new")}>
+          <Button onClick={() => navigateTo("/email-templates/new")}>
             <PlusMini />
             Create Template
           </Button>
@@ -90,7 +92,7 @@ const EmailTemplatesPage = () => {
             <div className="flex flex-col items-center justify-center py-10">
               <EnvelopeSolid className="text-ui-fg-muted mb-2 h-10 w-10" />
               <Text className="text-ui-fg-muted mb-4">No email templates yet</Text>
-              <Button variant="secondary" onClick={() => navigate("/email-templates/new")}>
+              <Button variant="secondary" onClick={() => navigateTo("/email-templates/new")}>
                 Create your first template
               </Button>
             </div>
@@ -136,7 +138,7 @@ const EmailTemplatesPage = () => {
                         <Button
                           variant="secondary"
                           size="small"
-                          onClick={() => navigate(`/email-templates/${template.id}`)}
+                          onClick={() => navigateTo(`/email-templates/${template.id}`)}
                         >
                           <PencilSquare />
                           Edit

@@ -1,8 +1,6 @@
-import { defineRouteConfig } from "@medusajs/admin-sdk"
 import { ArrowLeft, Eye } from "@medusajs/icons"
 import { Container, Heading, Text, Button, Input, Label, Switch, toast, Toaster, Textarea } from "@medusajs/ui"
 import { useEffect, useState } from "react"
-import { useNavigate, useParams } from "react-router-dom"
 
 const defaultHtml = `<!DOCTYPE html>
 <html>
@@ -35,12 +33,20 @@ const defaultHtml = `<!DOCTYPE html>
 </body>
 </html>`
 
-const EditTemplatePage = () => {
-  const { id } = useParams<{ id: string }>()
-  const isNew = id === "new"
-  const navigate = useNavigate()
+const getIdFromUrl = (): string => {
+  const path = window.location.pathname
+  const match = path.match(/\/email-templates\/([^/]+)/)
+  return match ? match[1] : "new"
+}
 
-  const [loading, setLoading] = useState(!isNew)
+const navigateTo = (path: string) => {
+  window.location.href = `/app${path}`
+}
+
+const EditTemplatePage = () => {
+  const [id, setId] = useState<string>("")
+  const [isNew, setIsNew] = useState(true)
+  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showPreview, setShowPreview] = useState(false)
   const [previewHtml, setPreviewHtml] = useState("")
@@ -55,14 +61,19 @@ const EditTemplatePage = () => {
   })
 
   useEffect(() => {
-    if (!isNew && id) {
-      fetchTemplate()
+    const urlId = getIdFromUrl()
+    setId(urlId)
+    setIsNew(urlId === "new")
+    if (urlId !== "new") {
+      fetchTemplate(urlId)
+    } else {
+      setLoading(false)
     }
-  }, [id])
+  }, [])
 
-  const fetchTemplate = async () => {
+  const fetchTemplate = async (templateId: string) => {
     try {
-      const response = await fetch(`/admin/email-templates/${id}`, {
+      const response = await fetch(`/admin/email-templates/${templateId}`, {
         credentials: "include",
       })
       if (!response.ok) throw new Error("Template not found")
@@ -77,7 +88,7 @@ const EditTemplatePage = () => {
       })
     } catch (err) {
       toast.error("Failed to load template")
-      navigate("/email-templates")
+      navigateTo("/email-templates")
     } finally {
       setLoading(false)
     }
@@ -107,7 +118,7 @@ const EditTemplatePage = () => {
       }
 
       toast.success(isNew ? "Template created!" : "Template saved!")
-      navigate("/email-templates")
+      navigateTo("/email-templates")
     } catch (err: any) {
       toast.error(err.message || "Failed to save template")
     } finally {
@@ -116,8 +127,6 @@ const EditTemplatePage = () => {
   }
 
   const handlePreview = async () => {
-    if (!id && !isNew) return
-
     try {
       // For new templates, we'll render locally
       if (isNew) {
@@ -157,7 +166,7 @@ const EditTemplatePage = () => {
       <Container className="divide-y p-0">
         <div className="flex items-center justify-between px-6 py-4">
           <div className="flex items-center gap-4">
-            <Button variant="secondary" size="small" onClick={() => navigate("/email-templates")}>
+            <Button variant="secondary" size="small" onClick={() => navigateTo("/email-templates")}>
               <ArrowLeft />
             </Button>
             <div>
