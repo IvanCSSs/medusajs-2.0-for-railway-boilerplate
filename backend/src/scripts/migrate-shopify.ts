@@ -164,8 +164,7 @@ export default async function migrateShopify({ container }: ExecArgs) {
     logger.info("Updating store settings...")
     const stores = await storeService.listStores()
     if (stores.length > 0) {
-      await storeService.updateStores({
-        id: stores[0].id,
+      await storeService.updateStores(stores[0].id, {
         name: storeSettings.name,
       } as any)
       logger.info(`Store updated: ${storeSettings.name}`)
