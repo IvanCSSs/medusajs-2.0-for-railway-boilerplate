@@ -138,6 +138,10 @@ const medusaConfig = {
     {
       resolve: './src/modules/customer-activity',
     },
+    // Email Templates Module (database-backed templates)
+    {
+      resolve: './src/modules/email-templates',
+    },
   ],
   plugins: [
   ...(MEILISEARCH_HOST && MEILISEARCH_ADMIN_KEY ? [{
