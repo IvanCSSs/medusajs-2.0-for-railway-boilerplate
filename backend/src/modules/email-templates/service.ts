@@ -1,7 +1,7 @@
 import { MedusaService } from "@medusajs/framework/utils"
-import { EmailTemplate } from "../models/email-template"
+import { EmailTemplate } from "./models/email-template"
 
-class EmailTemplateService extends MedusaService({
+class EmailTemplateModuleService extends MedusaService({
   EmailTemplate,
 }) {
   /**
@@ -51,4 +51,4 @@ class EmailTemplateService extends MedusaService({
   }
 }
 
-export default EmailTemplateService
+export default EmailTemplateModuleService
