@@ -21,6 +21,11 @@ import {
   MINIO_ACCESS_KEY,
   MINIO_SECRET_KEY,
   MINIO_BUCKET,
+  S3_FILE_URL,
+  S3_ACCESS_KEY_ID,
+  S3_SECRET_ACCESS_KEY,
+  S3_REGION,
+  S3_BUCKET,
   MEILISEARCH_HOST,
   MEILISEARCH_ADMIN_KEY
 } from 'lib/constants';
@@ -56,7 +61,18 @@ const medusaConfig = {
       resolve: '@medusajs/file',
       options: {
         providers: [
-          ...(MINIO_ENDPOINT && MINIO_ACCESS_KEY && MINIO_SECRET_KEY ? [{
+          // Priority: S3 > MinIO > Local
+          ...(S3_ACCESS_KEY_ID && S3_SECRET_ACCESS_KEY && S3_BUCKET ? [{
+            resolve: '@medusajs/file-s3',
+            id: 's3',
+            options: {
+              file_url: S3_FILE_URL || `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com`,
+              access_key_id: S3_ACCESS_KEY_ID,
+              secret_access_key: S3_SECRET_ACCESS_KEY,
+              region: S3_REGION,
+              bucket: S3_BUCKET,
+            }
+          }] : MINIO_ENDPOINT && MINIO_ACCESS_KEY && MINIO_SECRET_KEY ? [{
             resolve: './src/modules/minio-file',
             id: 'minio',
             options: {
