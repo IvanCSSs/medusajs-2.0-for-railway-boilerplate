@@ -45,6 +45,13 @@ export class RBACModuleService extends MedusaService({
 
     const roleIds = userRoles.map((ur) => ur.role_id)
 
+    // Check if user has Superadmin role - grant full access
+    const roles = await this.listRoles({ id: roleIds })
+    const hasSuperadmin = roles.some((r) => r.name === "Superadmin")
+    if (hasSuperadmin) {
+      return { allowed: true, reason: "Superadmin - full access" }
+    }
+
     // Find matching permission for this action/resource
     // Support wildcard matching for resources
     const permissions = await this.listPermissions({})
