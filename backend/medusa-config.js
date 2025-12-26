@@ -53,7 +53,8 @@ const medusaConfig = {
   },
   admin: {
     backendUrl: BACKEND_URL,
-    disable: SHOULD_DISABLE_ADMIN,
+    // Disable built-in admin - using Nocto instead (served from /app via custom route)
+    disable: true,
   },
   modules: [
     {
@@ -157,6 +158,10 @@ const medusaConfig = {
     // Email Templates Module (database-backed templates)
     {
       resolve: './src/modules/email-templates',
+    },
+    // RBAC Module (Role-Based Access Control)
+    {
+      resolve: './src/modules/rbac',
     },
   ],
   plugins: [

@@ -109,7 +109,6 @@ export const GET = async (req: MedusaRequest, res: MedusaResponse) => {
         email: providerIdentity?.entity_id || "unknown",
         provider: providerIdentity?.provider || "unknown",
         orphaned_user_id: appMetadata?.user_id || null,
-        created_at: identity.created_at,
       }
     })
 
