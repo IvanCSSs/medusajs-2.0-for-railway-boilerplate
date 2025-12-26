@@ -1,1 +1,1 @@
-import{ah as t}from"./index-S35l5lon.js";const e="http://localhost:9000",o="session",s="medusa_auth_token",n=new t({baseUrl:e,auth:{type:o,jwtTokenStorageKey:s}});typeof window<"u"&&(window.__sdk=n);export{n as s};
+import{ah as t}from"./index-S35l5lon.js";const e="https://backend-production-0d907.up.railway.app",o="session",s="medusa_auth_token",n=new t({baseUrl:e,auth:{type:o,jwtTokenStorageKey:s}});typeof window<"u"&&(window.__sdk=n);export{n as s};
