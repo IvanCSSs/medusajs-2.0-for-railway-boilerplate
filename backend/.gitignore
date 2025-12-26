@@ -6,7 +6,9 @@
 yarn-error.log
 .medusa-copy
 /.idea
-static
+# Keep static/app for Nocto admin panel build
+static/*
+!static/app
 coverage
 
 .medusa

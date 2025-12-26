@@ -1,0 +1,1 @@
+import{ah as t}from"./index-S35l5lon.js";const e="http://localhost:9000",o="session",s="medusa_auth_token",n=new t({baseUrl:e,auth:{type:o,jwtTokenStorageKey:s}});typeof window<"u"&&(window.__sdk=n);export{n as s};

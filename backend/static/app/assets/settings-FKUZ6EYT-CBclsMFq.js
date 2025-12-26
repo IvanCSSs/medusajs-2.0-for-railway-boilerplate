@@ -1,0 +1,1 @@
+import{X as s,b1 as a,r as n,j as o,ai as r}from"./index-S35l5lon.js";var p=()=>{const t=s(),e=a();return n.useEffect(()=>{e.pathname==="/settings"&&t("/settings/store",{replace:!0})},[e.pathname,t]),o.jsx(r,{})};export{p as Component};

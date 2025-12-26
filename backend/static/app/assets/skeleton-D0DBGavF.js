@@ -1,0 +1,1 @@
+import{r as t}from"./index-S35l5lon.js";import{c as o}from"./heading-Cdx6okg4.js";function n({className:e,...r}){return t.createElement("div",{className:o("bg-ui-bg-component animate-pulse rounded-md",e),...r})}export{n as S};
