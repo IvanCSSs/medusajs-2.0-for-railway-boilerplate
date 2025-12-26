@@ -1,8 +1,16 @@
 import { MedusaService } from "@medusajs/framework/utils"
+import { InferTypeOf } from "@medusajs/framework/types"
 import { Permission, Role, Policy, UserRole, PendingRole } from "./models"
 
 type PermissionAction = "read" | "write" | "delete"
 type PolicyDecision = "allow" | "deny"
+
+// Infer types from models
+type PermissionType = InferTypeOf<typeof Permission>
+type RoleType = InferTypeOf<typeof Role>
+type PolicyType = InferTypeOf<typeof Policy>
+type UserRoleType = InferTypeOf<typeof UserRole>
+type PendingRoleType = InferTypeOf<typeof PendingRole>
 
 export class RBACModuleService extends MedusaService({
   Permission,
@@ -91,10 +99,10 @@ export class RBACModuleService extends MedusaService({
    */
   async getUserPermissions(userId: string): Promise<{
     permissions: Array<{
-      permission: typeof Permission.$inferSelect
+      permission: PermissionType
       decision: PolicyDecision
     }>
-    roles: Array<typeof Role.$inferSelect>
+    roles: Array<RoleType>
   }> {
     const userRoles = await this.listUserRoles({ user_id: userId })
 
@@ -110,7 +118,7 @@ export class RBACModuleService extends MedusaService({
     // Build permission map with decisions
     const permissionMap = new Map<
       string,
-      { permission: typeof Permission.$inferSelect; decision: PolicyDecision }
+      { permission: PermissionType; decision: PolicyDecision }
     >()
 
     for (const policy of policies) {
@@ -136,7 +144,7 @@ export class RBACModuleService extends MedusaService({
   /**
    * Assign a role to a user
    */
-  async assignRole(userId: string, roleId: string): Promise<typeof UserRole.$inferSelect> {
+  async assignRole(userId: string, roleId: string): Promise<UserRoleType> {
     // Check if already assigned
     const existing = await this.listUserRoles({ user_id: userId, role_id: roleId })
     if (existing && existing.length > 0) {
@@ -169,7 +177,7 @@ export class RBACModuleService extends MedusaService({
     name: string,
     description: string | null,
     policies: Array<{ permissionId: string; decision: PolicyDecision }>
-  ): Promise<typeof Role.$inferSelect> {
+  ): Promise<RoleType> {
     const [role] = await this.createRoles([
       {
         name,
@@ -220,10 +228,10 @@ export class RBACModuleService extends MedusaService({
    * Get all categories with their permissions
    */
   async getPermissionsByCategory(): Promise<
-    Map<string, Array<typeof Permission.$inferSelect>>
+    Map<string, Array<PermissionType>>
   > {
     const permissions = await this.listPermissions({})
-    const categoryMap = new Map<string, Array<typeof Permission.$inferSelect>>()
+    const categoryMap = new Map<string, Array<PermissionType>>()
 
     for (const permission of permissions) {
       const category = permission.category || "General"
@@ -240,10 +248,10 @@ export class RBACModuleService extends MedusaService({
    * Get role with all its policies and permissions
    */
   async getRoleWithPolicies(roleId: string): Promise<{
-    role: typeof Role.$inferSelect
+    role: RoleType
     policies: Array<{
-      policy: typeof Policy.$inferSelect
-      permission: typeof Permission.$inferSelect
+      policy: PolicyType
+      permission: PermissionType
     }>
   } | null> {
     const [role] = await this.listRoles({ id: roleId })
@@ -264,12 +272,12 @@ export class RBACModuleService extends MedusaService({
    * Get all users with their roles
    */
   async getUsersWithRoles(): Promise<
-    Map<string, Array<typeof Role.$inferSelect>>
+    Map<string, Array<RoleType>>
   > {
     const userRoles = await this.listUserRoles({})
     const allRoles = await this.listRoles({})
 
-    const userRoleMap = new Map<string, Array<typeof Role.$inferSelect>>()
+    const userRoleMap = new Map<string, Array<RoleType>>()
 
     for (const ur of userRoles) {
       if (!userRoleMap.has(ur.user_id)) {
@@ -291,7 +299,7 @@ export class RBACModuleService extends MedusaService({
   async createPendingRoleForInvite(
     email: string,
     roleId: string
-  ): Promise<typeof PendingRole.$inferSelect> {
+  ): Promise<PendingRoleType> {
     // Remove any existing pending role for this email
     const existing = await this.listPendingRoles({ email })
     if (existing && existing.length > 0) {
@@ -312,7 +320,7 @@ export class RBACModuleService extends MedusaService({
    */
   async getPendingRoleForEmail(
     email: string
-  ): Promise<typeof PendingRole.$inferSelect | null> {
+  ): Promise<PendingRoleType | null> {
     const pendingRoles = await this.listPendingRoles({ email: email.toLowerCase() })
     return pendingRoles && pendingRoles.length > 0 ? pendingRoles[0] : null
   }
