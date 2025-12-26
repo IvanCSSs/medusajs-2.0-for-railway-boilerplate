@@ -6,7 +6,7 @@ import { generateEmailTemplate } from '../templates'
 
 type InjectedDependencies = {
   logger: Logger
-  emailTemplates?: any // Email templates service from DB module
+  // Note: emailTemplates may be injected if email-templates module is available
 }
 
 interface ResendServiceConfig {
@@ -34,15 +34,21 @@ export class ResendNotificationService extends AbstractNotificationProviderServi
   protected resend: Resend // Instance of the Resend API client
   protected emailTemplatesService_?: any // Database templates service
 
-  constructor({ logger, emailTemplates }: InjectedDependencies, options: ResendNotificationServiceOptions) {
+  constructor(container: InjectedDependencies & Record<string, any>, options: ResendNotificationServiceOptions) {
     super()
     this.config_ = {
       apiKey: options.api_key,
       from: options.from
     }
-    this.logger_ = logger
+    this.logger_ = container.logger
     this.resend = new Resend(this.config_.apiKey)
-    this.emailTemplatesService_ = emailTemplates
+    // emailTemplates is optional - only available if email-templates module is loaded
+    // Access it safely without requiring it in the type to avoid Awilix resolution errors
+    try {
+      this.emailTemplatesService_ = (container as any).emailTemplates
+    } catch {
+      this.emailTemplatesService_ = undefined
+    }
   }
 
   /**

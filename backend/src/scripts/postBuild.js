@@ -24,9 +24,38 @@ if (fs.existsSync(envPath)) {
   );
 }
 
+// Copy static/app folder for Nocto admin panel
+const staticSrc = path.join(process.cwd(), 'static', 'app');
+const staticDest = path.join(MEDUSA_SERVER_PATH, 'static', 'app');
+if (fs.existsSync(staticSrc)) {
+  console.log('Copying static/app folder for Nocto admin panel...');
+  // Create parent directory if needed
+  fs.mkdirSync(path.join(MEDUSA_SERVER_PATH, 'static'), { recursive: true });
+  // Copy recursively
+  copyDirSync(staticSrc, staticDest);
+  console.log('Static files copied successfully');
+} else {
+  console.log('No static/app folder found, skipping...');
+}
+
 // Install dependencies
 console.log('Installing dependencies in .medusa/server...');
-execSync('pnpm i --prod --frozen-lockfile', { 
+execSync('pnpm i --prod --frozen-lockfile', {
   cwd: MEDUSA_SERVER_PATH,
   stdio: 'inherit'
 });
+
+// Helper function to copy directory recursively
+function copyDirSync(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirSync(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}

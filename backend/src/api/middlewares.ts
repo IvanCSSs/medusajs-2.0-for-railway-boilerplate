@@ -7,6 +7,9 @@ import {
 import * as fs from "fs"
 import * as path from "path"
 
+// Track if we've logged the static directory info
+let hasLoggedStaticDir = false
+
 /**
  * Middleware to serve the Nocto admin SPA at /app
  */
@@ -15,7 +18,23 @@ function serveNoctoAdmin(
   res: MedusaResponse,
   next: MedusaNextFunction
 ) {
-  const staticDir = path.resolve(process.cwd(), "static/app")
+  // Try multiple possible locations for static files
+  // In production, files are copied to .medusa/server/static/app by postBuild.js
+  // In development, they're at the project root static/app
+  const possiblePaths = [
+    path.resolve(process.cwd(), "static/app"),           // Production (from .medusa/server) or Dev
+    path.resolve(process.cwd(), "../static/app"),        // Alternative from .medusa/server
+    path.resolve(__dirname, "../../static/app"),         // Relative to compiled file in src/api
+  ]
+
+  const staticDir = possiblePaths.find(p => fs.existsSync(p)) || possiblePaths[0]
+
+  // Debug log on first request
+  if (!hasLoggedStaticDir) {
+    console.log("[Nocto] Static dir search paths:", possiblePaths.map(p => `${p} (${fs.existsSync(p) ? 'EXISTS' : 'missing'})`))
+    console.log("[Nocto] Using static dir:", staticDir)
+    hasLoggedStaticDir = true
+  }
 
   // Get the requested path after /app
   const requestedPath = req.path.replace(/^\/app\/?/, "") || ""
