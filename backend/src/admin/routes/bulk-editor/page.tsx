@@ -369,7 +369,29 @@ const BulkEditorPage = () => {
     }
   }, [])
 
-  const tableData = flattenProducts(products)
+  // Add an empty row at the end for new product creation
+  const createEmptyRow = () => ({
+    id: "",
+    title: "",
+    subtitle: "",
+    handle: "",
+    status: "draft",
+    description: "",
+    thumbnail: "",
+    collection: "",
+    collectionId: "",
+    categories: "",
+    categoryIds: [],
+    variantTitle: "Default",
+    variantId: "",
+    sku: "",
+    price: "0.00",
+    images: "",
+    imageCount: 0,
+    isNew: true,
+  })
+
+  const tableData = [...flattenProducts(products), createEmptyRow()]
 
   const columns = [
     {
@@ -429,12 +451,52 @@ const BulkEditorPage = () => {
   const handleAfterOnCellMouseDown = (event: MouseEvent, coords: { row: number; col: number }) => {
     const colName = columns[coords.col]?.data
     if (colName === "images" || colName === "thumbnail") {
+      const isNewRow = coords.row >= products.length
+
+      if (isNewRow) {
+        // For new products, show a message that they need to save first
+        toast.error("Save the product first before adding images")
+        return
+      }
+
       const product = products[coords.row]
       if (product) {
         setSelectedProduct(product)
         setShowImageModal(true)
       }
     }
+  }
+
+  // Custom cell renderer to highlight the new product row
+  const afterGetRowHeader = (row: number, TH: HTMLTableHeaderCellElement) => {
+    const isNewRow = row >= products.length
+    if (isNewRow) {
+      TH.style.backgroundColor = "#166534" // Green background
+      TH.style.color = "#ffffff"
+      TH.textContent = "+"
+      TH.title = "New product row - fill in details and save"
+    }
+  }
+
+  // Highlight new row cells
+  const cells = (row: number, col: number): Handsontable.CellProperties => {
+    const cellProperties: Handsontable.CellProperties = {}
+    const isNewRow = row >= products.length
+
+    if (isNewRow) {
+      // Make new row cells editable (except ID which is auto-generated)
+      if (columns[col]?.data === "id") {
+        cellProperties.readOnly = true
+        cellProperties.renderer = function(instance, td, row, col, prop, value, cellProperties) {
+          td.textContent = "(auto)"
+          td.style.color = "#6b7280"
+          td.style.fontStyle = "italic"
+          return td
+        }
+      }
+    }
+
+    return cellProperties
   }
 
   const saveChanges = async () => {
@@ -446,63 +508,139 @@ const BulkEditorPage = () => {
 
     let successCount = 0
     let errorCount = 0
+    let createdCount = 0
 
     for (const rowIndex of changedRows) {
       const rowData = sourceData[rowIndex]
-      if (!rowData || !rowData.id) continue
+      if (!rowData) continue
 
-      try {
-        const productUpdate: any = {
-          title: rowData.title,
-          subtitle: rowData.subtitle || null,
-          handle: rowData.handle,
-          status: rowData.status,
-          description: rowData.description || null,
-        }
+      // Check if this is a new product (no ID but has a title)
+      const isNewProduct = !rowData.id && rowData.title && rowData.title.trim()
 
-        if (rowData.collection) {
-          const matchedCollection = collections.find((c) => c.title === rowData.collection)
-          if (matchedCollection) {
-            productUpdate.collection_id = matchedCollection.id
+      if (isNewProduct) {
+        // CREATE NEW PRODUCT
+        try {
+          // Generate handle from title if not provided
+          const handle = rowData.handle?.trim() || rowData.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+
+          const newProduct: any = {
+            title: rowData.title.trim(),
+            handle,
+            status: rowData.status || "draft",
+            is_giftcard: false,
+            discountable: true,
           }
-        } else {
-          productUpdate.collection_id = null
-        }
 
-        // Update thumbnail
-        if (rowData.thumbnail !== products[rowIndex]?.thumbnail) {
-          productUpdate.thumbnail = rowData.thumbnail || null
-        }
+          if (rowData.subtitle?.trim()) {
+            newProduct.subtitle = rowData.subtitle.trim()
+          }
+          if (rowData.description?.trim()) {
+            newProduct.description = rowData.description.trim()
+          }
+          if (rowData.thumbnail?.trim()) {
+            newProduct.thumbnail = rowData.thumbnail.trim()
+          }
 
-        const productRes = await fetch(`/admin/products/${rowData.id}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify(productUpdate),
-        })
+          // Add collection if selected
+          if (rowData.collection) {
+            const matchedCollection = collections.find((c) => c.title === rowData.collection)
+            if (matchedCollection) {
+              newProduct.collection_id = matchedCollection.id
+            }
+          }
 
-        if (!productRes.ok) {
-          throw new Error(`Failed to update product ${rowData.id}`)
-        }
+          // Create product with a default variant
+          const priceAmount = rowData.price ? Math.round(parseFloat(rowData.price) * 100) : 0
+          newProduct.variants = [{
+            title: "Default",
+            sku: rowData.sku?.trim() || null,
+            manage_inventory: false,
+            prices: [{ amount: priceAmount, currency_code: "usd" }],
+          }]
 
-        // Update variant price
-        if (rowData.variantId && rowData.price) {
-          const priceAmount = Math.round(parseFloat(rowData.price) * 100)
-          await fetch(`/admin/products/${rowData.id}/variants/${rowData.variantId}`, {
+          // Add images if provided
+          if (rowData.images?.trim()) {
+            const imageUrls = rowData.images.split("\n").filter((u: string) => u.trim())
+            if (imageUrls.length > 0) {
+              newProduct.images = imageUrls.map((url: string) => ({ url: url.trim() }))
+            }
+          }
+
+          const createRes = await fetch("/admin/products", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             credentials: "include",
-            body: JSON.stringify({
-              prices: [{ amount: priceAmount, currency_code: "usd" }],
-            }),
+            body: JSON.stringify(newProduct),
           })
-        }
 
-        successCount++
-      } catch (err) {
-        console.error(`Error updating row ${rowIndex}:`, err)
-        errorCount++
+          if (!createRes.ok) {
+            const errorData = await createRes.json().catch(() => ({}))
+            throw new Error(errorData.message || `Failed to create product: ${rowData.title}`)
+          }
+
+          createdCount++
+          successCount++
+        } catch (err: any) {
+          console.error(`Error creating product:`, err)
+          toast.error(`Failed to create "${rowData.title}": ${err.message || "Unknown error"}`)
+          errorCount++
+        }
+      } else if (rowData.id) {
+        // UPDATE EXISTING PRODUCT
+        try {
+          const productUpdate: any = {
+            title: rowData.title,
+            subtitle: rowData.subtitle || null,
+            handle: rowData.handle,
+            status: rowData.status,
+            description: rowData.description || null,
+          }
+
+          if (rowData.collection) {
+            const matchedCollection = collections.find((c) => c.title === rowData.collection)
+            if (matchedCollection) {
+              productUpdate.collection_id = matchedCollection.id
+            }
+          } else {
+            productUpdate.collection_id = null
+          }
+
+          // Update thumbnail
+          if (rowData.thumbnail !== products[rowIndex]?.thumbnail) {
+            productUpdate.thumbnail = rowData.thumbnail || null
+          }
+
+          const productRes = await fetch(`/admin/products/${rowData.id}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(productUpdate),
+          })
+
+          if (!productRes.ok) {
+            throw new Error(`Failed to update product ${rowData.id}`)
+          }
+
+          // Update variant price
+          if (rowData.variantId && rowData.price) {
+            const priceAmount = Math.round(parseFloat(rowData.price) * 100)
+            await fetch(`/admin/products/${rowData.id}/variants/${rowData.variantId}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({
+                prices: [{ amount: priceAmount, currency_code: "usd" }],
+              }),
+            })
+          }
+
+          successCount++
+        } catch (err) {
+          console.error(`Error updating row ${rowIndex}:`, err)
+          errorCount++
+        }
       }
+      // Skip rows with no ID and no title (empty rows)
     }
 
     setSaving(false)
@@ -510,9 +648,13 @@ const BulkEditorPage = () => {
     setHasChanges(false)
 
     if (errorCount === 0) {
-      toast.success(`Successfully updated ${successCount} products`)
+      if (createdCount > 0) {
+        toast.success(`Created ${createdCount} new product(s), updated ${successCount - createdCount} existing`)
+      } else {
+        toast.success(`Successfully updated ${successCount} products`)
+      }
     } else {
-      toast.error(`Updated ${successCount} products, ${errorCount} failed`)
+      toast.error(`Saved ${successCount} products, ${errorCount} failed`)
     }
 
     await fetchData()
@@ -999,6 +1141,8 @@ const BulkEditorPage = () => {
                 autoWrapCol={true}
                 afterChange={handleAfterChange}
                 afterOnCellMouseDown={handleAfterOnCellMouseDown}
+                afterGetRowHeader={afterGetRowHeader}
+                cells={cells}
                 licenseKey="non-commercial-and-evaluation"
                 rowHeights={50}
               />
@@ -1008,8 +1152,8 @@ const BulkEditorPage = () => {
 
         <div className="px-6 py-4 border-t bg-ui-bg-subtle">
           <Text className="text-ui-fg-subtle text-sm">
-            <strong>Tips:</strong> Double-click to edit cells. Click on thumbnail/images to manage product images.
-            Use dropdowns for Status and Collection. Right-click for context menu.
+            <strong>Tips:</strong> The last row (marked with +) is for creating new products - fill in at least a Title and click Save.
+            Click on thumbnail/images to manage product images. Use dropdowns for Status and Collection.
           </Text>
         </div>
       </Container>

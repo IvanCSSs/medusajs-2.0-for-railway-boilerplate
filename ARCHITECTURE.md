@@ -289,6 +289,90 @@ When creating tenant schemas, these tables must NOT be copied:
 - "Invalid email or password" errors
 - 401 Unauthorized on random routes
 
+### Tables That MUST Exist in Tenant Schemas
+
+These tables are tenant-specific and must be copied to each tenant schema:
+- `api_key` - Publishable and secret API keys
+- `publishable_api_key_sales_channel` - Links API keys to sales channels
+
+**Why:** Each tenant needs their own API keys for storefront authentication. The `ensurePublishableApiKeyMiddleware` is patched at startup to resolve tenant context before validating keys.
+
+---
+
+## Middleware Patching for Tenant Isolation
+
+### The Problem
+
+Medusa's built-in middlewares (like `ensurePublishableApiKeyMiddleware`) run BEFORE custom middlewares because they're registered via `app.use()` in the framework's `router.js` before custom middleware registration.
+
+### The Solution
+
+The `src/instrumentation.ts` file patches critical middlewares at startup using Node.js require hooks:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    APPLICATION STARTUP                           │
+│                                                                  │
+│  1. medusa-config.ts imports instrumentation.ts                  │
+│  2. patchPgForTenantIsolation() patches pg Client               │
+│  3. patchPublishableKeyMiddleware() patches API key middleware  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    REQUEST FLOW (AFTER PATCHING)                 │
+│                                                                  │
+│  1. Request arrives with X-Tenant-ID header                      │
+│  2. Patched ensurePublishableApiKeyMiddleware runs:              │
+│     a. Resolves tenant from header/cookie                        │
+│     b. Sets search_path to tenant schema                         │
+│     c. Calls original middleware (now queries correct schema)    │
+│  3. API key is validated in tenant schema                        │
+│  4. Request continues to route handler                           │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/instrumentation.ts` | Startup patches for pg Client and publishable key middleware |
+| `src/lib/tenant-context.ts` | AsyncLocalStorage for tenant context (`runWithTenant`, `getCurrentTenant`) |
+| `medusa-config.ts` | Imports instrumentation at application startup |
+
+### Patching Techniques
+
+**1. Require Cache Patching** - Modify already-loaded modules:
+```typescript
+if (require.cache[middlewarePath]) {
+  const cachedModule = require.cache[middlewarePath]
+  cachedModule.exports.ensurePublishableApiKeyMiddleware = wrappedMiddleware
+}
+```
+
+**2. Require Hook** - Intercept future module loads:
+```typescript
+const originalRequire = Module.prototype.require
+Module.prototype.require = function(id: string) {
+  const result = originalRequire.apply(this, arguments)
+  if (id.includes('target-module')) {
+    // Patch the result
+  }
+  return result
+}
+```
+
+**3. Path Building** - Bypass package.json exports restrictions:
+```typescript
+// Can't use: require.resolve('@medusajs/framework/dist/http/middlewares/...')
+// Instead, build the path manually:
+const frameworkPath = require.resolve('@medusajs/framework')
+const frameworkDir = path.dirname(frameworkPath)
+const middlewarePath = path.join(frameworkDir, 'http', 'middlewares', 'ensure-publishable-api-key.js')
+```
+
 ---
 
 ## Railway Services (Final)
@@ -385,6 +469,90 @@ S3_FILE_URL=https://medusa-multistore-assets.s3.us-east-1.amazonaws.com
 | `src/api/admin/files/upload/route.ts` | File upload endpoint |
 | `src/api/admin/files/presign/route.ts` | Presigned URL endpoint |
 | `medusa-config.ts` | S3 module configuration |
+
+---
+
+## Email Configuration (Per-Tenant)
+
+### Overview
+
+Each tenant can configure their own email sending identity through the admin UI. The platform owner provides the email provider credentials (globally), while tenants configure sender details.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│           Global Environment Variables                       │
+│  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (SES)             │
+│  SENDGRID_API_KEY (SendGrid)                                 │
+│  RESEND_API_KEY (Resend)                                     │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Email Providers Library                    │
+│                   src/lib/email-providers.ts                 │
+│                                                              │
+│   sendViaSES() | sendViaSendGrid() | sendViaResend()        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│   Tenant A      │  │   Tenant B      │  │   Tenant C      │
+│ email_config:   │  │ email_config:   │  │ email_config:   │
+│  provider: ses  │  │  provider:      │  │  provider: ses  │
+│  sender_email:  │  │    sendgrid     │  │  sender_email:  │
+│    orders@a.com │  │  sender_email:  │  │    hi@c.com     │
+│  sender_name:   │  │    mail@b.com   │  │  ses_region:    │
+│    Store A      │  │  sender_name:   │  │    eu-west-1    │
+└─────────────────┘  │    Store B      │  └─────────────────┘
+                     └─────────────────┘
+```
+
+### Database Schema
+
+Email config is stored in `public.tenants.email_config` JSONB column:
+
+```sql
+-- Column added by scripts/add-email-config.ts
+ALTER TABLE public.tenants ADD COLUMN email_config JSONB DEFAULT '{}';
+```
+
+### Supported Providers
+
+| Provider | Environment Variables | Per-Tenant Config |
+|----------|----------------------|-------------------|
+| **AWS SES** | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `provider`, `sender_email`, `sender_name`, `ses_region` |
+| **SendGrid** | `SENDGRID_API_KEY` | `provider`, `sender_email`, `sender_name` |
+| **Resend** | `RESEND_API_KEY` | `provider`, `sender_email`, `sender_name` |
+
+### Admin UI
+
+Settings → Email page (`src/admin/routes/settings/email/page.tsx`):
+
+| Feature | Description |
+|---------|-------------|
+| Provider dropdown | Select SES, SendGrid, or Resend |
+| SES Region | AWS region (only shown for SES) |
+| Sender Email | From address for transactional emails |
+| Sender Name | Display name in email client |
+| Test Email | Send test message to verify config |
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/admin/tenants/:slug` | PATCH | Update email_config |
+| `/admin/tenants/:slug/email/test` | POST | Send test email |
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/lib/email-providers.ts` | Unified email sending abstraction |
+| `src/admin/routes/settings/email/page.tsx` | Admin UI for email configuration |
+| `src/api/admin/tenants/[slug]/email/test/route.ts` | Test email endpoint |
+| `scripts/add-email-config.ts` | Migration to add email_config column |
 
 ---
 
@@ -1737,6 +1905,573 @@ STRIPE_WEBHOOK_SECRET=whsec_xxx
 4. **Masked display**: API keys shown as `sk_live_...xxx` in admin UI
 5. **Audit logging**: Payment configuration changes are logged
 6. **Webhook isolation**: Each tenant verifies webhooks with their own secret
+
+---
+
+---
+
+# Frontend Integration (Drinkyum Storefront)
+
+## Overview
+
+The Drinkyum storefront (`/Users/ivan/Drinkyum`) is a Next.js 16 + React 19 + TypeScript frontend that integrates with the Medusa multistore backend.
+
+**Tech Stack:**
+- Next.js 16 (App Router)
+- React 19
+- TypeScript
+- Tailwind CSS 4
+- Framer Motion (animations)
+
+**Repository:** https://github.com/IvanCSSs/drinkyum
+
+---
+
+## Integration Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     DRINKYUM FRONTEND                            │
+│  Next.js 16 + React 19 + TypeScript                              │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ React Contexts                                               │ │
+│  │ ┌─────────────┐  ┌─────────────┐                            │ │
+│  │ │ CartContext │  │ AuthContext │                            │ │
+│  │ │ - items     │  │ - customer  │                            │ │
+│  │ │ - addToCart │  │ - login     │                            │ │
+│  │ │ - subtotal  │  │ - register  │                            │ │
+│  │ └─────────────┘  └─────────────┘                            │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ API Client Layer (/src/lib/)                                │ │
+│  │ ┌─────────────────┐ ┌─────────────┐ ┌─────────────────────┐ │ │
+│  │ │ medusa-client.ts│ │ products.ts │ │ cart.ts/checkout.ts │ │ │
+│  │ │ - X-Tenant-ID   │ │ - getProducts│ │ - addToCart         │ │ │
+│  │ │ - Bearer token  │ │ - getPrice  │ │ - updateQuantity    │ │ │
+│  │ └─────────────────┘ └─────────────┘ └─────────────────────┘ │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│                              ▼                                   │
+└─────────────────────────────────────────────────────────────────┘
+                               │
+                               │ HTTPS (X-Tenant-ID: drinkyum)
+                               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     MEDUSA BACKEND                               │
+│  admin.radicalz.io (or localhost:9000)                           │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ Tenant Middleware → SET search_path TO tenant_drinkyum      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ PostgreSQL: tenant_drinkyum schema                          │ │
+│  │ - product, product_variant, product_collection              │ │
+│  │ - cart, cart_line_item                                      │ │
+│  │ - customer, order                                           │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Key Integration Files
+
+### API Client (`/src/lib/medusa-client.ts`)
+
+Central API client that handles tenant identification and authentication:
+
+```typescript
+const BACKEND_URL = process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL || 'http://localhost:9000'
+const TENANT_SLUG = process.env.NEXT_PUBLIC_TENANT_SLUG || 'drinkyum'
+
+class MedusaClient {
+  private getHeaders(): HeadersInit {
+    return {
+      'Content-Type': 'application/json',
+      'X-Tenant-ID': TENANT_SLUG,  // Critical for multi-tenancy
+      ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
+    }
+  }
+
+  async get<T>(path: string): Promise<T> {
+    const res = await fetch(`${BACKEND_URL}${path}`, {
+      headers: this.getHeaders(),
+      credentials: 'include',  // For cookie-based sessions
+    })
+    return res.json()
+  }
+}
+```
+
+### Products Library (`/src/lib/products.ts`)
+
+Handles product fetching with proper typing:
+
+```typescript
+export async function getProducts(params?: ProductListParams) {
+  return medusa.get(`/store/products${buildQuery(params)}`)
+}
+
+export async function getCollections() {
+  return medusa.get('/store/collections')
+}
+
+export function getProductPrice(product: Product, currencyCode = 'usd'): string | null {
+  // Prices stored in cents, convert to dollars
+  const minPrice = Math.min(...prices)
+  return formatPrice(minPrice, currencyCode)  // "$70.00"
+}
+```
+
+### Cart Context (`/src/contexts/CartContext.tsx`)
+
+Global cart state using Medusa Cart API:
+
+```typescript
+export function CartProvider({ children }: { children: React.ReactNode }) {
+  const [cart, setCart] = useState<Cart | null>(null)
+
+  const addToCart = async (variantId: string, quantity: number) => {
+    const cartId = await getOrCreateCart()
+    const result = await medusaAddToCart(cartId, variantId, quantity)
+    setCart(result.cart)
+  }
+
+  // Derived state
+  const items = cart?.items || []
+  const itemCount = items.reduce((sum, item) => sum + item.quantity, 0)
+  const subtotal = cart?.subtotal || 0  // In cents
+
+  return (
+    <CartContext.Provider value={{ cart, items, itemCount, subtotal, addToCart, ... }}>
+      {children}
+    </CartContext.Provider>
+  )
+}
+```
+
+---
+
+## Environment Variables
+
+### Frontend `.env.local`
+
+```env
+# Medusa Backend
+NEXT_PUBLIC_MEDUSA_BACKEND_URL=https://api.drinkyum.com
+NEXT_PUBLIC_TENANT_SLUG=drinkyum
+
+# Stripe (for checkout)
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_xxx
+
+# S3/CDN (for image rewrites)
+S3_FILE_URL=https://medusa-multistore-assets.s3.us-east-1.amazonaws.com
+```
+
+### CDN Rewrites (`next.config.ts`)
+
+```typescript
+async rewrites() {
+  return [{
+    source: '/cdn/:path*',
+    destination: `${process.env.S3_FILE_URL}/${process.env.NEXT_PUBLIC_TENANT_SLUG}/:path*`,
+  }]
+}
+```
+
+---
+
+## Pages Integrated
+
+| Page | API Integration | Status |
+|------|-----------------|--------|
+| Homepage (`/`) | Products component fetches from `/store/products` | ✅ Complete |
+| Collections (`/collections`) | Fetches from `/store/collections` | ✅ Complete |
+| Collection Detail (`/collections/[handle]`) | Fetches products by collection | ✅ Complete |
+| Product Detail (`/products/[handle]`) | Fetches product + subscription options | ✅ Complete |
+| Cart (`/cart`) | Uses CartContext with Medusa cart API | ✅ Complete |
+| Checkout (`/checkout`) | Placeholder API functions | ⏳ Pending |
+| Account | Not built | ⏳ Pending |
+
+---
+
+## Graceful Fallback Pattern
+
+All pages implement graceful fallbacks when the API is unavailable:
+
+```typescript
+const [products, setProducts] = useState<Product[]>([])
+const [isLoading, setIsLoading] = useState(true)
+
+useEffect(() => {
+  async function loadProducts() {
+    try {
+      const data = await getProducts({ limit: 6 })
+      if (data.products?.length > 0) {
+        setProducts(data.products)  // Use API data
+      } else {
+        setProducts(fallbackProducts)  // Use hardcoded fallback
+      }
+    } catch (err) {
+      setProducts(fallbackProducts)  // Use hardcoded fallback on error
+    } finally {
+      setIsLoading(false)
+    }
+  }
+  loadProducts()
+}, [])
+```
+
+This ensures the storefront remains functional even when:
+- Backend is down
+- Network issues occur
+- Tenant has no products configured yet
+
+---
+
+## Payment Gateway Test Connection
+
+### Overview
+
+Added functionality to test payment gateway credentials without making actual transactions. Available from Settings → Payment Gateways in the admin panel.
+
+### Endpoint
+
+`POST /admin/tenants/:slug/payment-gateways/:gateway_id/test`
+
+### Supported Gateways
+
+| Gateway | Test Method | What's Validated |
+|---------|-------------|------------------|
+| **Authorize.net** | `authenticateTestRequest` | API Login ID + Transaction Key |
+| **Stripe** | `GET /v1/balance` | Secret API Key validity |
+| **PayPal** | Not implemented | - |
+| **Manual** | Always succeeds | No credentials needed |
+
+### Admin UI
+
+The payment gateway cards now include:
+- **Test Connection** button (appears only for configured gateways)
+- Result display with success/failure styling
+- Details showing sandbox vs production mode
+
+### Key Implementation
+
+```typescript
+// Authorize.net credential validation (no transaction)
+async function testAuthorizeNet(config: EncryptedGatewayConfig): Promise<TestResult> {
+  const credentials = decryptAuthorizeNetCredentials(config)
+
+  const endpoint = config.sandbox_mode
+    ? "https://apitest.authorize.net/xml/v1/request.api"
+    : "https://api.authorize.net/xml/v1/request.api"
+
+  const requestBody = {
+    authenticateTestRequest: {
+      merchantAuthentication: {
+        name: credentials.api_login_id,
+        transactionKey: credentials.transaction_key,
+      },
+    },
+  }
+
+  // POST and check response.messages.resultCode === "Ok"
+}
+```
+
+---
+
+## Tenant Configuration Examples
+
+### Drinkyum (yum tenant)
+
+| Setting | Value |
+|---------|-------|
+| **Tenant Slug** | `yum` |
+| **Domain** | `drinkyum.com` |
+| **API Domain** | `api.drinkyum.com` |
+| **Admin Domain** | `admin.drinkyum.com` |
+| **Payment Gateway** | Authorize.net (production) |
+
+**Frontend `.env.local`:**
+```env
+NEXT_PUBLIC_MEDUSA_BACKEND_URL=https://api.drinkyum.com
+NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY=pk_8a1c2236a1e5297ad86f28ca8b004fb08a04aa8d80c73ee2e529b970c64ff6cd
+NEXT_PUBLIC_TENANT_SLUG=yum
+S3_FILE_URL=https://medusa-multistore-assets.s3.us-east-1.amazonaws.com
+```
+
+### Note on Tenant Slug vs Domain
+
+The tenant slug and domain are independent. A tenant can have:
+- **Slug**: `yum` (used in `X-Tenant-ID` header, database schema `tenant_yum`)
+- **Domain**: `drinkyum.com` (customer-facing brand)
+
+This allows flexibility - the slug is a technical identifier while the domain is the business identity.
+
+---
+
+---
+
+## Bulk Product Editor
+
+### Overview
+
+A spreadsheet-style product editor using Handsontable that allows bulk editing of products with Excel-like functionality.
+
+**Location:** `/app/bulk-editor` (Admin route)
+
+**File:** `src/admin/routes/bulk-editor/page.tsx`
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| Spreadsheet UI | Excel-like grid with inline editing |
+| Column Sorting | Click headers to sort ascending/descending |
+| Column Filtering | Filter by any column value |
+| Context Menu | Right-click for copy, paste, undo, redo |
+| Dark Mode | Full dark mode support matching Medusa admin |
+| Image Manager | Upload, drag-and-drop, and media library |
+| New Product Row | Green "+" row at bottom for adding products |
+
+### Editable Columns
+
+| Column | Field | Type |
+|--------|-------|------|
+| ID | `id` | Read-only |
+| Title | `title` | Text |
+| Handle | `handle` | Text |
+| Status | `status` | Dropdown (draft/published) |
+| Thumbnail | `thumbnail` | Image picker |
+| Images | `images` | Image manager |
+| SKU | `sku` | Text |
+| Price (USD) | `price` | Numeric |
+| Inventory | `inventory_quantity` | Numeric |
+| Weight | `weight` | Numeric |
+
+### Image Manager Modal
+
+The Image Manager provides:
+1. **Current Images** - View and remove existing images
+2. **Upload Zone** - Drag-and-drop or click to upload
+3. **Media Library** - Browse previously uploaded images
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Manage Images - [Product Title]                          [×]    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ Current Images                                                  │
+│ ┌──────┐ ┌──────┐ ┌──────┐                                     │
+│ │ img1 │ │ img2 │ │ img3 │  (Click to set as thumbnail)        │
+│ │  [×] │ │  [×] │ │  [×] │                                     │
+│ └──────┘ └──────┘ └──────┘                                     │
+│                                                                 │
+│ ┌─────────────────────────────────────────────────────────────┐ │
+│ │                                                             │ │
+│ │   📤 Drop files here or click to upload                    │ │
+│ │                                                             │ │
+│ └─────────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│ Media Library  [Show/Hide]                                      │
+│ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐                            │
+│ │ lib1 │ │ lib2 │ │ lib3 │ │ lib4 │  (Click to add)           │
+│ └──────┘ └──────┘ └──────┘ └──────┘                            │
+│                                                                 │
+│                              [Close]                            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### New Product Workflow
+
+1. Click on the green "+" row at the bottom of the spreadsheet
+2. Fill in product details (title, SKU, price, etc.)
+3. Click thumbnail/images cell to open Image Manager
+4. Upload images (stored temporarily in spreadsheet data)
+5. Tab to next row to save (or use save button)
+
+For new products, images are stored temporarily in the cell data until the product is saved:
+```typescript
+// Images stored as URLs in cell data
+rowData.thumbnail = "/cdn/products/new-upload.jpg"
+rowData.images = ["/cdn/products/img1.jpg", "/cdn/products/img2.jpg"]
+```
+
+### API Endpoints Used
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/admin/products` | Load all products |
+| POST | `/admin/products/:id` | Update existing product |
+| POST | `/admin/products` | Create new product |
+| POST | `/admin/files/upload` | Upload images |
+| GET | `/admin/files` | List media library |
+
+### Dependencies
+
+```json
+{
+  "handsontable": "^15.2.0",
+  "@handsontable/react": "^15.2.0"
+}
+```
+
+### Key Implementation Details
+
+**Tenant Context:**
+```typescript
+// Get tenant from cookie for API calls
+const getTenantSlug = () => {
+  const match = document.cookie.match(/x-tenant-id=([^;]+)/)
+  return match ? match[1] : null
+}
+```
+
+**Dark Mode CSS Injection:**
+```typescript
+// Inject Handsontable dark mode styles to match Medusa admin
+useEffect(() => {
+  const styleId = "handsontable-dark-mode"
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement("style")
+    style.id = styleId
+    style.textContent = darkModeCSS
+    document.head.appendChild(style)
+  }
+}, [])
+```
+
+---
+
+---
+
+## Drinkyum Storefront - Account & Auth Pages
+
+### Overview
+
+Complete account management and authentication system for the Drinkyum Next.js storefront. 18 files total including 16 pages and 2 shared components.
+
+**Directory:** `/Users/ivan/drinkyum`
+
+### Design System
+
+| Element | Value |
+|---------|-------|
+| Primary Color | `--yum-pink: #E1258F` |
+| Secondary Color | `--yum-cyan: #00B8E4` |
+| Background | `--yum-dark: #080808` |
+| Container Style | `rgba(255,255,255,0.03)` background, `rgba(255,255,255,0.08)` border |
+| Animations | Framer Motion for all transitions |
+
+### File Structure
+
+```
+src/
+├── app/
+│   ├── login/page.tsx                    # Email/password login
+│   ├── register/page.tsx                 # Registration with password validation
+│   ├── forgot-password/page.tsx          # Password reset request
+│   ├── reset-password/page.tsx           # Reset with token from URL
+│   ├── verify-email/page.tsx             # Email verification handler
+│   ├── search/page.tsx                   # Product search with grid
+│   ├── account/
+│   │   ├── page.tsx                      # Dashboard with summary cards
+│   │   ├── profile/page.tsx              # Edit name, email, phone
+│   │   ├── password/page.tsx             # Change password
+│   │   ├── addresses/page.tsx            # Address CRUD with modal
+│   │   ├── orders/
+│   │   │   ├── page.tsx                  # Order history list
+│   │   │   └── [id]/page.tsx             # Order detail with items
+│   │   ├── subscriptions/
+│   │   │   ├── page.tsx                  # Subscribe & Save list
+│   │   │   └── [id]/page.tsx             # Subscription management
+│   │   └── returns/page.tsx              # Return requests list
+│   └── order/
+│       └── [id]/
+│           └── confirmed/page.tsx        # Order confirmation
+├── components/
+│   └── account/
+│       ├── index.ts                      # Barrel export
+│       ├── AccountLayout.tsx             # Auth-protected wrapper
+│       └── AccountSidebar.tsx            # Navigation with active states
+└── lib/
+    ├── auth.ts                           # Login, register, password reset
+    ├── orders.ts                         # Orders, returns
+    ├── addresses.ts                      # Address CRUD
+    └── subscriptions.ts                  # Subscribe & Save management
+```
+
+### Page Features
+
+| Page | Key Features |
+|------|--------------|
+| **Login** | Email/password, password visibility toggle, returnUrl redirect |
+| **Register** | Password requirements (8+ chars, number, uppercase), terms checkbox |
+| **Account Dashboard** | Summary cards (orders, subscriptions, spent), recent orders, quick links |
+| **Orders List** | Status badges, pagination-ready, order cards |
+| **Order Detail** | Items with thumbnails, tracking info, request return button |
+| **Addresses** | Modal for add/edit, default shipping/billing badges, US states dropdown |
+| **Subscriptions List** | Product thumbnails, frequency display, status badges |
+| **Subscription Detail** | Pause/resume/cancel/skip, frequency change, order history |
+| **Returns** | Status tracking, refund amount display |
+| **Search** | URL query param support, product grid, add to cart |
+
+### Shared Components
+
+**AccountLayout:**
+- Auth protection with redirect to `/login?returnUrl=...`
+- Responsive layout with sidebar
+- Page title and description props
+
+**AccountSidebar:**
+- Desktop: Vertical sidebar with Framer Motion active indicator
+- Mobile: Horizontal scrollable tabs
+- Logout button integration
+
+### API Integration
+
+All pages use the existing API layer in `/src/lib/`:
+
+```typescript
+// Example: Orders page
+import { getPurchases, formatOrderAmount } from "@/lib/orders"
+
+useEffect(() => {
+  const { orders } = await getPurchases()
+  setOrders(orders)
+}, [])
+```
+
+### Status Badges Pattern
+
+Consistent status badge styling across pages:
+
+```typescript
+const getStatusBadgeClasses = (status: string) => {
+  const baseClasses = "px-2.5 py-1 rounded-full text-xs font-medium"
+  switch (status) {
+    case "active":
+      return `${baseClasses} bg-green-500/20 text-green-400 border border-green-500/30`
+    case "pending":
+      return `${baseClasses} bg-yellow-500/20 text-yellow-400 border border-yellow-500/30`
+    case "canceled":
+      return `${baseClasses} bg-red-500/20 text-red-400 border border-red-500/30`
+    // ...
+  }
+}
+```
+
+### Environment Configuration
+
+```env
+# .env.local
+NEXT_PUBLIC_MEDUSA_BACKEND_URL=https://admin.radicalz.io
+NEXT_PUBLIC_TENANT_SLUG=yum
+```
 
 ---
 

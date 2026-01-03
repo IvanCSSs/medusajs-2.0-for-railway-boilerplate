@@ -1083,3 +1083,630 @@ When customer changes frequency, we fetch tenant defaults and apply the new disc
 
 **Skip vs Pause:**
 Skip moves next delivery forward by one interval without pausing. Pause stops deliveries entirely until resumed.
+
+---
+
+## Frontend Integration Lessons (Drinkyum Storefront) - Jan 2, 2026
+
+### Prices Are Stored in Cents
+Medusa stores all prices in cents (minor units). When displaying prices on the frontend:
+```typescript
+// WRONG - displays "7000"
+<span>{product.variants[0].prices[0].amount}</span>
+
+// CORRECT - displays "$70.00"
+const priceInCents = product.variants[0].prices[0].amount
+const formatted = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD'
+}).format(priceInCents / 100)
+```
+
+### React 19 useEffect Behavior
+In development mode with React 19, `useEffect` runs twice (Strict Mode). This causes duplicate API calls. Don't be alarmed - this is expected behavior in dev mode and doesn't happen in production.
+
+### Hydration Mismatches with API Data
+Server-rendered pages show fallback/placeholder data, but client-side fetches replace it with API data. This can cause React hydration errors.
+
+**Solution**: Use `useEffect` for client-only data fetching, or use Next.js data fetching patterns (`getServerSideProps`/server components) for SSR.
+
+### Cart ID Persistence
+The Medusa cart ID must persist across browser sessions. Store it in `localStorage`:
+```typescript
+const CART_ID_KEY = 'medusa_cart_id'
+
+// On cart creation
+localStorage.setItem(CART_ID_KEY, cart.id)
+
+// On page load
+const savedCartId = localStorage.getItem(CART_ID_KEY)
+if (savedCartId) {
+  // Fetch existing cart
+}
+```
+
+**Gotcha**: Cart IDs can become invalid (expired, deleted). Handle 404 responses by creating a new cart:
+```typescript
+try {
+  const cart = await fetchCart(savedCartId)
+} catch (error) {
+  if (error.status === 404) {
+    localStorage.removeItem(CART_ID_KEY)
+    // Create new cart
+  }
+}
+```
+
+### X-Tenant-ID Header is Critical
+Every API request to the Medusa backend MUST include the `X-Tenant-ID` header. Without it, requests will fail or return wrong tenant data.
+
+```typescript
+// In your API client
+const headers: HeadersInit = {
+  'Content-Type': 'application/json',
+  'X-Tenant-ID': process.env.NEXT_PUBLIC_TENANT_SLUG || 'drinkyum',
+}
+```
+
+### Graceful Fallbacks for Empty Tenant Data
+New tenants may not have products, collections, or other data configured yet. Always provide fallback content:
+
+```typescript
+const [products, setProducts] = useState<Product[]>(fallbackProducts)
+
+useEffect(() => {
+  async function load() {
+    const apiProducts = await getProducts()
+    if (apiProducts.length > 0) {
+      setProducts(apiProducts)  // Only replace if API has data
+    }
+    // Otherwise keep fallback products
+  }
+  load()
+}, [])
+```
+
+### Product Images May Not Exist
+Products uploaded via admin may not have images. Always provide a fallback image:
+
+```typescript
+<Image
+  src={product.thumbnail || product.images?.[0]?.url || '/images/placeholder.jpg'}
+  alt={product.title}
+/>
+```
+
+### CDN URL Rewriting
+The backend stores relative image URLs (`/cdn/products/abc.jpg`). The frontend must rewrite these to the actual S3 URL using Next.js rewrites:
+
+```typescript
+// next.config.ts
+async rewrites() {
+  return [{
+    source: '/cdn/:path*',
+    destination: `https://s3-bucket.s3.amazonaws.com/${tenantSlug}/:path*`,
+  }]
+}
+```
+
+### Reusable Account Layout Pattern
+For account pages with consistent sidebar navigation, create a shared layout component:
+
+```typescript
+// src/components/account/AccountLayout.tsx
+export function AccountLayout({ children, title, description }) {
+  const { isAuthenticated, isLoading, logout } = useAuth()
+  const router = useRouter()
+  const pathname = usePathname()
+
+  // Auth protection
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      router.push(`/login?returnUrl=${encodeURIComponent(pathname)}`)
+    }
+  }, [isAuthenticated, isLoading])
+
+  return (
+    <div className="flex">
+      <AccountSidebar />
+      <main>{children}</main>
+    </div>
+  )
+}
+```
+
+### Auth Pages URL State Management
+Auth pages should preserve `returnUrl` for post-login redirect:
+
+```typescript
+// In login page
+const searchParams = useSearchParams()
+const returnUrl = searchParams.get("returnUrl") || "/account"
+
+// After successful login
+router.push(returnUrl)
+```
+
+### CartContext vs AuthContext Method Naming
+Be careful with context method names - they can differ between projects:
+
+```typescript
+// Some projects use:
+const { addItem, isAdding } = useCart()
+
+// Others use:
+const { addToCart, isLoading: cartLoading } = useCart()
+
+// Always check the actual context implementation
+```
+
+### Context Providers Must Wrap App
+Cart and Auth contexts must be available throughout the app. Create a Providers wrapper:
+
+```typescript
+// src/components/Providers.tsx
+export function Providers({ children }: { children: React.ReactNode }) {
+  return (
+    <AuthProvider>
+      <CartProvider>
+        {children}
+      </CartProvider>
+    </AuthProvider>
+  )
+}
+
+// src/app/layout.tsx
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  )
+}
+```
+
+### Variant Selection for Add to Cart
+Medusa requires a `variant_id` for add to cart, not `product_id`. Products always have at least one variant:
+
+```typescript
+// Get the first variant (or let user select)
+const variantId = product.variants[0]?.id
+if (!variantId) {
+  throw new Error('Product has no variants')
+}
+await addToCart(variantId, quantity)
+```
+
+### Common Gotchas
+
+1. **Empty cart after refresh**: Cart ID not persisted to localStorage
+2. **Wrong prices displayed**: Not dividing by 100 (cents to dollars)
+3. **API returns empty array**: Tenant has no data - show fallbacks
+4. **CORS errors**: Backend STORE_CORS doesn't include frontend domain
+5. **401 on store routes**: Missing or invalid X-Tenant-ID header
+6. **Images 404**: CDN rewrites not configured in next.config.ts
+7. **Cart not updating in navbar**: Not using CartContext globally
+
+---
+
+## Payment Gateway Testing (Jan 2, 2026)
+
+### Authorize.net Sandbox vs Production - CRITICAL
+
+Authorize.net sandbox and production are **completely separate accounts** with different credentials:
+
+| Environment | Portal URL | API Endpoint |
+|-------------|------------|--------------|
+| **Sandbox** | `sandbox.authorize.net` | `https://apitest.authorize.net/xml/v1/request.api` |
+| **Production** | `new.authorize.net` | `https://api.authorize.net/xml/v1/request.api` |
+
+**Common error**: Using production credentials with sandbox mode enabled (or vice versa) returns E00007 "User authentication failed".
+
+**Solution**:
+- If testing with sandbox mode, create a separate sandbox account at `sandbox.authorize.net`
+- Sandbox credentials do NOT work on production endpoints
+- Production credentials do NOT work on sandbox endpoints
+
+### Test Connection Without Transactions
+
+To validate Authorize.net credentials without making charges, use `authenticateTestRequest`:
+
+```typescript
+const requestBody = {
+  authenticateTestRequest: {
+    merchantAuthentication: {
+      name: apiLoginId,
+      transactionKey: transactionKey,
+    },
+  },
+}
+
+const response = await fetch(endpoint, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(requestBody),
+})
+
+// Check response.messages.resultCode === "Ok"
+```
+
+This only validates credentials - no transactions, no test charges, no account modifications.
+
+### Authorize.net JSON Response BOM
+
+Authorize.net sometimes returns JSON with a BOM (Byte Order Mark) character. Always clean it:
+
+```typescript
+const text = await response.text()
+const cleanText = text.replace(/^\uFEFF/, "")
+const data = JSON.parse(cleanText)
+```
+
+### Tenant Slug vs Domain Name
+
+A tenant's slug doesn't have to match its domain. Example:
+- **Tenant slug**: `yum`
+- **Domain**: `drinkyum.com`
+- **API domain**: `api.drinkyum.com`
+
+The frontend uses `NEXT_PUBLIC_TENANT_SLUG=yum` in the `X-Tenant-ID` header, while the domain is completely independent.
+
+---
+
+## Publishable API Key Tenant Isolation (Jan 2-3, 2026)
+
+### The Problem
+
+Medusa's `ensurePublishableApiKeyMiddleware` runs BEFORE custom middlewares in the Express chain. This causes tenant-specific publishable API keys to fail validation because:
+
+1. Medusa registers built-in middlewares via `app.use()` in framework's `router.js` (lines 93-97)
+2. Custom middlewares are registered AFTER (line 114)
+3. Without tenant context, the publishable key lookup queries the `public` schema instead of the tenant schema
+
+**Error you'll see:**
+```json
+{
+  "type": "not_allowed",
+  "message": "A valid publishable key is required to proceed with the request."
+}
+```
+
+### Why Secret API Keys Work But Publishable Keys Don't
+
+| Middleware | Registration | Tenant Context? |
+|------------|--------------|-----------------|
+| `ensurePublishableApiKeyMiddleware` | `app.use("/store", ...)` in router.js:93 | ❌ No - runs FIRST |
+| `authenticate` (for secret keys) | After custom middlewares | ✅ Yes - runs AFTER tenant middleware |
+
+Secret API keys work because they're validated by `authenticate` middleware, which runs AFTER custom middlewares have set tenant context.
+
+### The Solution: Patch the Middleware at Startup
+
+Since we can't change the registration order, we patch the middleware function itself at startup using require hooks and cache patching.
+
+**Key insight**: Node.js caches required modules. By patching the require cache, we can intercept and wrap the middleware before Medusa uses it.
+
+```typescript
+// src/instrumentation.ts
+export function patchPublishableKeyMiddleware(): void {
+  const Module = require('module')
+  const pathModule = require('path')
+
+  // Build path manually - can't use require.resolve with package subpaths
+  const frameworkPath = require.resolve('@medusajs/framework')
+  const frameworkDir = pathModule.dirname(frameworkPath)
+  const middlewarePath = pathModule.join(frameworkDir, 'http', 'middlewares', 'ensure-publishable-api-key.js')
+
+  // Try to patch from cache (module already loaded)
+  if (require.cache[middlewarePath]) {
+    const cachedModule = require.cache[middlewarePath]
+    const originalMiddleware = cachedModule.exports.ensurePublishableApiKeyMiddleware
+
+    if (originalMiddleware && !originalMiddleware._tenantPatched) {
+      cachedModule.exports.ensurePublishableApiKeyMiddleware = createTenantAwareMiddleware(originalMiddleware)
+      cachedModule.exports.ensurePublishableApiKeyMiddleware._tenantPatched = true
+    }
+  }
+
+  // Also hook future requires
+  const originalRequire = Module.prototype.require
+  Module.prototype.require = function(id: string) {
+    const result = originalRequire.apply(this, arguments)
+
+    if (id.includes('ensure-publishable-api-key') && result.ensurePublishableApiKeyMiddleware) {
+      if (!result.ensurePublishableApiKeyMiddleware._tenantPatched) {
+        result.ensurePublishableApiKeyMiddleware = createTenantAwareMiddleware(result.ensurePublishableApiKeyMiddleware)
+        result.ensurePublishableApiKeyMiddleware._tenantPatched = true
+      }
+    }
+
+    return result
+  }
+}
+```
+
+**The tenant-aware wrapper:**
+```typescript
+function createTenantAwareMiddleware(originalMiddleware: any) {
+  const wrapped = async function(req: any, res: any, next: any) {
+    const tenantSlug = req.headers?.['x-tenant-id'] || parseCookies(req.headers?.cookie)['x-tenant-id']
+
+    if (!tenantSlug) {
+      return originalMiddleware(req, res, next)  // Use public schema
+    }
+
+    // Resolve tenant and set search_path BEFORE validation
+    const tenant = await resolveTenantBySlugDirect(tenantSlug)
+
+    if (tenant?.schemaName && tenant.schemaName !== 'public') {
+      const pgConnection = req.scope?.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+      if (pgConnection) {
+        await pgConnection.raw(`SET search_path TO "${tenant.schemaName}", public`)
+      }
+    }
+
+    req.tenant = tenant
+    return runWithTenant(tenant, () => originalMiddleware(req, res, next))
+  }
+
+  wrapped._tenantPatched = true
+  return wrapped
+}
+```
+
+### Critical Gotcha: Package Subpath Exports
+
+The @medusajs/framework package.json doesn't export internal middleware files. You CANNOT use:
+```typescript
+// THIS FAILS:
+require.resolve('@medusajs/framework/dist/http/middlewares/ensure-publishable-api-key')
+// Error: Package subpath './dist/http/middlewares/ensure-publishable-api-key' is not defined by "exports"
+```
+
+**Solution**: Build the path manually:
+```typescript
+const frameworkPath = require.resolve('@medusajs/framework')
+const frameworkDir = pathModule.dirname(frameworkPath)
+const middlewarePath = pathModule.join(frameworkDir, 'http', 'middlewares', 'ensure-publishable-api-key.js')
+```
+
+### Database Change: API Keys Must Stay in Tenant Schema
+
+For tenant-specific publishable API keys to work, the `api_key` and `publishable_api_key_sales_channel` tables must NOT be in the EXCLUDED_TABLES list during tenant schema creation:
+
+```typescript
+// src/api/admin/tenants/route.ts
+const EXCLUDED_TABLES = [
+  'tenants',
+  'mikro_orm_migrations',
+  'script_migrations',
+  'user',
+  'auth_identity',
+  'provider_identity',
+  'invite',
+  'user_tenant_assignments',
+  // NOTE: api_key and publishable_api_key_sales_channel are NOT excluded.
+  // They are tenant-specific.
+]
+```
+
+### Verification
+
+After implementation, logs should show:
+```
+[tenant-instrumentation] Patched ensurePublishableApiKeyMiddleware (from cache)
+[tenant-instrumentation] Resolved tenant: yum -> schema tenant_yum
+[tenant-instrumentation] Set search_path to tenant_yum on scoped connection
+```
+
+And API calls should succeed:
+```bash
+curl -X GET 'https://admin.radicalz.io/store/products' \
+  -H 'x-publishable-api-key: pk_8a1c...' \
+  -H 'x-tenant-id: yum'
+# Returns: {"products":[],"count":0,"offset":0,"limit":50}
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/instrumentation.ts` | Patches pg Client and publishable key middleware at startup |
+| `src/api/admin/tenants/route.ts` | Excludes api_key from EXCLUDED_TABLES |
+| `medusa-config.ts` | Imports instrumentation at startup |
+
+### Summary
+
+To make tenant-specific publishable API keys work in Medusa 2.0 multi-tenant:
+1. Patch the publishable key middleware at startup
+2. Resolve tenant and set search_path BEFORE the original middleware runs
+3. Keep api_key tables in tenant schemas (don't exclude during schema copy)
+4. Build middleware paths manually to avoid package.json exports restrictions
+
+---
+
+## Bulk Product Editor with Handsontable (Jan 2, 2026)
+
+### Overview
+Ported the Bulk Product Editor from the old single-tenant project to the multi-tenant setup. Uses Handsontable for spreadsheet-style editing of products.
+
+### Key Implementation Details
+
+**Dependencies:**
+- `handsontable`: ^15.2.0
+- `@handsontable/react`: ^15.2.0
+
+**Dark Mode CSS Injection:**
+Handsontable doesn't natively support Medusa's dark mode. Solution: inject dark mode styles dynamically:
+
+```typescript
+useEffect(() => {
+  const styleId = "handsontable-dark-mode"
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement("style")
+    style.id = styleId
+    style.textContent = `
+      .dark .handsontable, .dark .handsontable td, .dark .handsontable th {
+        background-color: #1f2937 !important;
+        color: #e5e7eb !important;
+        border-color: #374151 !important;
+      }
+      /* ... more dark mode styles */
+    `
+    document.head.appendChild(style)
+  }
+}, [])
+```
+
+**Image Manager Modal Pattern:**
+For handling images in both existing and new products:
+
+1. **Existing Products**: Images are uploaded directly to S3 and saved via API
+2. **New Products**: Images are stored temporarily in the spreadsheet cell data until the row is saved
+
+```typescript
+// For new products, update spreadsheet cell directly
+const updateSpreadsheetCell = (rowIndex: number, column: string, value: any) => {
+  if (hotRef.current?.hotInstance) {
+    const colIndex = columns.findIndex(c => c.data === column)
+    if (colIndex !== -1) {
+      hotRef.current.hotInstance.setDataAtCell(rowIndex, colIndex, value)
+    }
+  }
+}
+```
+
+**New Product Row Pattern:**
+Add an empty row at the bottom for creating new products:
+
+```typescript
+const createEmptyRow = () => ({
+  id: "",
+  title: "",
+  handle: "",
+  status: "draft",
+  thumbnail: "",
+  // ... other fields initialized to empty/default
+  isNew: true,  // Flag to identify new rows
+})
+
+// Append to data
+const tableData = [...flattenProducts(products), createEmptyRow()]
+```
+
+**Cell Click Detection for Image Modal:**
+Handle clicks on thumbnail/image cells to open the image manager:
+
+```typescript
+const handleAfterOnCellMouseDown = (event: MouseEvent, coords: { row: number; col: number }) => {
+  const columnName = columns[coords.col]?.data
+  if (columnName !== "thumbnail" && columnName !== "images") return
+
+  const isNewRow = coords.row === products.length
+  if (isNewRow) {
+    setSelectedProduct({
+      id: "",
+      title: "New Product",
+      thumbnail: null,
+      images: [],
+    })
+  } else {
+    setSelectedProduct(products[coords.row])
+  }
+  setSelectedRowIndex(coords.row)
+  setShowImageModal(true)
+}
+```
+
+### Common Gotchas
+
+1. **Handsontable License**: Free for non-commercial use. Commercial use requires a license key via `licenseKey` prop.
+
+2. **Column Widths in Medusa Layout**: Use `width: "100%"` on container and let columns auto-size or set fixed widths.
+
+3. **React Strict Mode**: Handsontable may render twice in development due to Strict Mode. This is expected behavior.
+
+4. **Tenant Context for API Calls**: All product API calls must include the `x-tenant-id` cookie. The bulk editor reads this from `document.cookie`.
+
+5. **Image URLs are Relative**: Stored as `/cdn/products/...`, displayed via S3 presigned URLs or CDN rewrites.
+
+---
+
+## Per-Tenant Email Configuration (Jan 2, 2026)
+
+### Overview
+Implemented Email Settings admin page allowing tenant owners to configure email providers and sender details through the UI.
+
+### Email Provider Architecture
+
+**Three supported providers:**
+| Provider | Env Var | Best For |
+|----------|---------|----------|
+| AWS SES | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | High volume, cost-effective |
+| SendGrid | `SENDGRID_API_KEY` | Developer-friendly, analytics |
+| Resend | `RESEND_API_KEY` | Modern API, React email templates |
+
+**Global vs Per-Tenant Credentials:**
+- Credentials (API keys) are stored in **global environment variables**
+- Per-tenant config stores only: provider selection, sender email, sender name, SES region
+
+This design lets the platform owner manage one set of API keys while tenants customize their sending identity.
+
+### Email Config Storage
+
+Stored in `public.tenants.email_config` JSONB column:
+```json
+{
+  "provider": "ses",
+  "sender_email": "orders@mystore.com",
+  "sender_name": "My Store",
+  "ses_region": "us-east-1",
+  "status": "verified"
+}
+```
+
+### Provider Auto-Detection
+
+The `email-providers.ts` library auto-detects available providers from environment:
+```typescript
+export function getDefaultProvider(): EmailProvider {
+  if (process.env.SENDGRID_API_KEY) return "sendgrid"
+  if (process.env.RESEND_API_KEY) return "resend"
+  if (process.env.AWS_ACCESS_KEY_ID) return "ses"
+  return "sendgrid" // Default fallback
+}
+```
+
+### Key Implementation Details
+
+**Unified Send Function:**
+```typescript
+// src/lib/email-providers.ts
+export async function sendEmail(params: SendEmailParams): Promise<SendEmailResult> {
+  switch (params.provider) {
+    case "sendgrid": return sendViaSendGrid(params)
+    case "resend": return sendViaResend(params)
+    case "ses": return sendViaSES(params)
+  }
+}
+```
+
+**Test Email Endpoint:**
+The `/admin/tenants/:slug/email/test` endpoint validates configuration by sending a formatted test email. Returns message ID on success.
+
+### Common Gotchas
+
+1. **AWS SES Sandbox Mode**: New AWS accounts start in sandbox mode where you can only send to verified emails. Request production access before go-live.
+
+2. **Sender Verification Required**: All providers require sender email verification before sending:
+   - SES: Verify in AWS Console → SES → Verified Identities
+   - SendGrid: Domain authentication in Settings → Sender Authentication
+   - Resend: Domain verification in Dashboard → Domains
+
+3. **SES Region Matters**: SES is region-specific. If credentials are for `us-east-1`, you must use that region in the config.
+
+4. **Error Messages Vary by Provider**: Each provider returns different error formats. The `email-providers.ts` normalizes these to `{ success, messageId?, error? }`.
+
+5. **Settings Sidebar Placement**: Pages in `src/admin/routes/settings/*/page.tsx` automatically appear in Settings sidebar - no manual registration needed.

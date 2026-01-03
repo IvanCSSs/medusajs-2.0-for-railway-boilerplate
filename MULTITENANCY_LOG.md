@@ -869,3 +869,563 @@ export const config = defineRouteConfig({
 - Payment Gateways → `/app/settings/payments`
 
 **Key learning**: Pages under `src/admin/routes/settings/*/page.tsx` automatically appear in the Settings sidebar when they export a `config` with a `label`. No additional configuration needed.
+
+---
+
+## Frontend Integration (Drinkyum Storefront) - Jan 2, 2026
+
+### Overview
+Integrated the Next.js 16 storefront (`/Users/ivan/Drinkyum`) with the Medusa multistore backend, providing full e-commerce functionality with tenant isolation.
+
+### New Files Created in Drinkyum
+
+| File | Purpose |
+|------|---------|
+| `src/lib/medusa-client.ts` | API client with X-Tenant-ID header injection |
+| `src/lib/auth.ts` | Customer authentication functions |
+| `src/lib/cart.ts` | Cart management (create, add, update, remove) |
+| `src/lib/checkout.ts` | Checkout flow functions |
+| `src/lib/products.ts` | Product fetching from Medusa API |
+| `src/lib/subscriptions.ts` | Subscribe & Save management |
+| `src/lib/content.ts` | CMS/blog content fetching |
+| `src/lib/analytics.ts` | Customer activity tracking |
+| `src/lib/addresses.ts` | Address management |
+| `src/lib/payments.ts` | Saved payment methods |
+| `src/lib/orders.ts` | Order history fetching |
+| `src/contexts/AuthContext.tsx` | Authentication state provider |
+| `src/contexts/CartContext.tsx` | Cart state provider with localStorage |
+| `src/components/Providers.tsx` | Context provider wrapper |
+
+### Integration Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                     Drinkyum Storefront                          │
+│                    (Next.js 16 + React 19)                       │
+├──────────────────────────────────────────────────────────────────┤
+│ CartContext  │  AuthContext  │  Products  │  Checkout  │  Account│
+├──────────────┴───────────────┴────────────┴────────────┴─────────┤
+│                       medusa-client.ts                           │
+│              (X-Tenant-ID: "drinkyum" header)                    │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                 Medusa Multistore Backend                        │
+│               (admin.radicalz.io / Railway)                      │
+├──────────────────────────────────────────────────────────────────┤
+│  Tenant Middleware → SET search_path TO "tenant_drinkyum"        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Environment Configuration
+
+**`.env.local` in Drinkyum:**
+```env
+NEXT_PUBLIC_MEDUSA_BACKEND_URL=https://admin.radicalz.io
+NEXT_PUBLIC_TENANT_SLUG=drinkyum
+S3_FILE_URL=https://medusa-multistore-assets.s3.us-east-1.amazonaws.com
+```
+
+### Key Integration Patterns
+
+**1. Tenant Header Injection:**
+```typescript
+// src/lib/medusa-client.ts
+const headers: HeadersInit = {
+  'Content-Type': 'application/json',
+  'X-Tenant-ID': process.env.NEXT_PUBLIC_TENANT_SLUG || 'drinkyum',
+}
+```
+
+**2. Graceful Fallback Pattern:**
+All API-integrated pages fall back to hardcoded data when the API is unavailable:
+```typescript
+try {
+  const apiProducts = await getProducts({ limit: 6 })
+  if (apiProducts.length > 0) {
+    setProducts(apiProducts)
+  }
+  // Keep fallback products if API returns empty
+} catch (error) {
+  console.error('Failed to fetch products:', error)
+  // Fallback products already set as initial state
+}
+```
+
+**3. CDN Rewrites (next.config.ts):**
+```typescript
+async rewrites() {
+  return [{
+    source: '/cdn/:path*',
+    destination: `${process.env.S3_FILE_URL}/${process.env.NEXT_PUBLIC_TENANT_SLUG}/:path*`,
+  }]
+}
+```
+
+### Pages Integrated
+
+| Page | Status | Notes |
+|------|--------|-------|
+| Homepage Products | ✅ API + Fallback | Uses `getProducts()` with fallback |
+| Collections | ✅ API + Fallback | Uses `getCollections()` with fallback |
+| Collection Detail | ✅ API + Fallback | Fetches collection products |
+| Product Detail | ✅ API + Fallback | Includes subscription options |
+| Cart Page | ✅ API + Fallback | Uses CartContext |
+| Navbar Cart Count | ✅ | Real-time cart sync via context |
+| Checkout | ⏳ Placeholder | Functions defined, needs Stripe integration |
+| Account | ❌ Not Started | Login/register pages needed |
+
+### Cart Context Implementation
+
+```typescript
+// src/contexts/CartContext.tsx
+export function CartProvider({ children }) {
+  const [cartId, setCartId] = useState<string | null>(null)
+  const [items, setItems] = useState<CartItem[]>([])
+
+  // Sync cart with Medusa API
+  useEffect(() => {
+    const savedCartId = localStorage.getItem('medusa_cart_id')
+    if (savedCartId) {
+      fetchCart(savedCartId)
+    }
+  }, [])
+
+  const addToCart = async (variantId: string, quantity: number) => {
+    // Create cart if needed, then add item
+    // Updates context state after API call
+  }
+}
+```
+
+---
+
+## Payment Gateway Test Connection (Jan 2, 2026)
+
+### Overview
+Added a "Test Connection" button to the Payment Gateways settings page that validates credentials against the payment provider's API without making any actual transactions.
+
+### Implementation
+
+**New Endpoint:** `POST /admin/tenants/:slug/payment-gateways/:gateway_id/test`
+
+Tests gateway credentials by making a validation-only API call:
+- **Authorize.net**: Uses `authenticateTestRequest` to validate API Login ID and Transaction Key
+- **Stripe**: Fetches `/v1/balance` endpoint to verify API key validity
+- **PayPal**: Not yet implemented
+- **Manual**: Always returns success (no credentials to test)
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/api/admin/tenants/[slug]/payment-gateways/[gateway_id]/test/route.ts` | Test endpoint |
+| `src/admin/routes/settings/payments/page.tsx` | Added Test Connection button and result display |
+
+### API Response Format
+
+```typescript
+interface TestResult {
+  success: boolean
+  message: string
+  gateway_id: string
+  details?: {
+    mode: "sandbox" | "production"
+    endpoint?: string
+    error_code?: string
+  }
+}
+```
+
+### Admin UI Updates
+
+Added to the payment gateway card:
+- **Test Connection** button (only visible for configured gateways)
+- **Result display** with green/red styling based on success/failure
+- Shows connection mode (sandbox vs production) in details
+
+### Authorize.net Sandbox vs Production
+
+**Critical Lesson**: Authorize.net sandbox and production are completely separate accounts:
+- **Sandbox**: `sandbox.authorize.net` - Create test account here
+- **Production**: `new.authorize.net` - Live account
+- API Login ID and Transaction Key from one don't work on the other!
+
+The test endpoint automatically selects the correct API endpoint based on `sandbox_mode`:
+```typescript
+const endpoint = config.sandbox_mode
+  ? "https://apitest.authorize.net/xml/v1/request.api"
+  : "https://api.authorize.net/xml/v1/request.api"
+```
+
+---
+
+## Drinkyum Tenant Configuration (Jan 2, 2026)
+
+### Tenant Setup
+- **Tenant slug**: `yum` (not `drinkyum`)
+- **Domain**: `drinkyum.com`
+- **API domain**: `api.drinkyum.com` (CNAME to Railway backend)
+- **Payment**: Authorize.net only (production mode)
+
+### Frontend Environment (`.env.local`)
+
+```env
+NEXT_PUBLIC_MEDUSA_BACKEND_URL=https://api.drinkyum.com
+NEXT_PUBLIC_MEDUSA_PUBLISHABLE_KEY=pk_8a1c2236a1e5297ad86f28ca8b004fb08a04aa8d80c73ee2e529b970c64ff6cd
+NEXT_PUBLIC_TENANT_SLUG=yum
+S3_FILE_URL=https://medusa-multistore-assets.s3.us-east-1.amazonaws.com
+```
+
+### DNS Configuration
+
+| Subdomain | Record Type | Value |
+|-----------|-------------|-------|
+| `api.drinkyum.com` | CNAME | Railway backend URL |
+| `admin.drinkyum.com` | CNAME | Railway backend URL |
+
+### Remaining Setup Tasks
+1. ✅ Payment gateway configured (Authorize.net production)
+2. ✅ Email configuration (AWS SES via admin UI)
+3. ⏳ Add products in Medusa admin
+4. ⏳ Configure shipping (last)
+
+---
+
+## Email Settings Admin UI (Jan 2, 2026)
+
+### Overview
+Created a new admin UI page under Settings → Email that allows tenant owners to configure email sending without API calls or SQL.
+
+### Components Created
+
+**Admin Page: `/src/admin/routes/settings/email/page.tsx`**
+- Provider dropdown (AWS SES, SendGrid, Resend)
+- Sender email and name inputs
+- AWS SES region selector (only shown for SES)
+- Test email functionality
+- Permission-gated (super admin or tenant owner/admin only)
+
+**Test Email API: `/src/api/admin/tenants/[slug]/email/test/route.ts`**
+- `POST /admin/tenants/:slug/email/test`
+- Sends a formatted HTML test email using the configured provider
+- Returns success/failure with message ID
+
+### Email Provider Configuration
+
+Providers are configured per-tenant in `email_config` JSONB column:
+
+```json
+{
+  "provider": "ses",
+  "sender_email": "orders@drinkyum.com",
+  "sender_name": "DrinkYUM",
+  "ses_region": "us-east-1",
+  "status": "verified"
+}
+```
+
+### Provider Credentials
+
+All three providers use **global environment variables** (not per-tenant credentials):
+
+| Provider | Environment Variable(s) |
+|----------|------------------------|
+| **AWS SES** | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SES_REGION` |
+| **SendGrid** | `SENDGRID_API_KEY` |
+| **Resend** | `RESEND_API_KEY` |
+
+The per-tenant config only stores sender details and provider selection.
+
+### Implementation Details
+
+**Medusa Settings Sidebar Integration:**
+Pages at `src/admin/routes/settings/*/page.tsx` automatically appear in the Settings sidebar when they export:
+```typescript
+export const config = defineRouteConfig({
+  label: "Email",  // Appears in sidebar
+})
+```
+
+**Tenant Context:**
+Uses `getCurrentTenantSlug()` from `src/admin/lib/tenant-switch.ts` to get the current tenant from cookie.
+
+**Access Control:**
+- Super admins can configure email for any tenant
+- Tenant owners/admins can configure for their own tenant
+- Checks `useUserRole()` and `useCurrentTenantRole()` hooks
+
+### AWS SES Setup for DrinkYUM
+
+1. **Global AWS credentials** already configured in Railway
+2. **Verify sender email** in AWS SES console:
+   - Go to SES → Verified identities → Create identity
+   - Add `orders@drinkyum.com`
+   - Click verification link in email
+3. **Request production access** if still in sandbox mode
+4. **Configure in admin UI**:
+   - Provider: AWS SES
+   - Region: us-east-1
+   - Sender Email: orders@drinkyum.com
+   - Sender Name: DrinkYUM
+5. **Test email** using the admin UI test feature
+
+---
+
+## Bulk Product Editor (Jan 2, 2026)
+
+### Overview
+Ported the Handsontable-based Bulk Product Editor from the single-tenant project to the multi-tenant setup. Provides a spreadsheet interface for editing multiple products at once.
+
+### Components Created
+
+**Admin Page: `/src/admin/routes/bulk-editor/page.tsx`**
+- Full Handsontable spreadsheet integration
+- Edit multiple products in a familiar spreadsheet UI
+- Columns: Thumbnail, Title, Handle, Status, Price, SKU, Collection, Images, ID
+- Multi-tenant aware via cookie-based tenant context
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Spreadsheet View** | Edit products in a familiar Excel-like grid |
+| **New Product Row** | Green-highlighted "+" row at bottom for adding new products |
+| **Image Manager** | Click thumbnail/images cells to open full image modal |
+| **Drag & Drop Upload** | Drag images directly onto upload zone |
+| **Media Library** | Browse and select from previously uploaded images |
+| **Works with New Products** | Add images before saving new product |
+| **CSV Export** | Export current view to CSV file |
+| **Batch Save** | Save all changes at once |
+| **Dark Mode** | Full dark mode support matching Medusa admin |
+
+### Image Manager Modal
+
+The image manager modal supports:
+
+1. **Upload via file picker** - Click "Select Files" to browse
+2. **Drag & drop** - Drop images directly on the upload zone
+3. **Media library** - Toggle "Media Library" to browse all uploaded images
+4. **Set thumbnail** - Click "Set as Thumbnail" on any image
+5. **Delete images** - Red X button on image cards
+6. **New product support** - Modal works for both existing and new (unsaved) products
+
+### New Product Workflow
+
+1. Click on the green "+" row at the bottom
+2. Fill in at least the **Title** field
+3. Click on **Thumbnail** or **Images** cell to open image manager
+4. Upload or select images (stored temporarily)
+5. Click **Save Changes** to create product with images
+
+### Multi-Tenant Integration
+
+The bulk editor automatically uses tenant context from the `x-tenant-id` cookie:
+- All API calls use `credentials: "include"` to pass cookies
+- Products shown/created are for the currently selected tenant
+- No hardcoded tenant IDs; works with store switcher seamlessly
+
+### Dependencies Added
+
+```json
+{
+  "handsontable": "^15.0.0",
+  "@handsontable/react": "^15.0.0"
+}
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/admin/routes/bulk-editor/page.tsx` | Main bulk editor component |
+
+### API Endpoints Used
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/admin/products` | GET | Fetch products for spreadsheet |
+| `/admin/products` | POST | Create new product |
+| `/admin/products/:id` | POST | Update existing product |
+| `/admin/products/:id/variants/:id` | POST | Update variant price |
+| `/admin/collections` | GET | Fetch collections for dropdown |
+| `/admin/product-categories` | GET | Fetch categories |
+| `/admin/uploads` | POST | Upload images |
+| `/admin/uploads` | GET | Fetch media library
+
+---
+
+## Publishable API Key Tenant Isolation (Jan 2-3, 2026)
+
+### Problem
+The Drinkyum frontend was getting "A valid publishable key is required to proceed with the request" errors when calling the Medusa store API.
+
+### Root Cause
+Medusa's `ensurePublishableApiKeyMiddleware` runs BEFORE custom middlewares in the Express middleware chain. The middleware uses `query.graph()` to look up the API key, but without tenant context set, it queries the `public` schema where tenant-specific keys don't exist.
+
+**The timing issue:**
+1. Medusa's built-in middlewares (CORS → publishable key → auth) are registered via `app.use()` in the framework's `router.js`
+2. Custom middlewares from `middlewares.ts` are registered AFTER built-in middlewares
+3. By the time our tenant middleware runs, publishable key validation has already failed
+
+### Solution
+Patched `ensurePublishableApiKeyMiddleware` in `instrumentation.ts` to resolve tenant context BEFORE validating the API key:
+
+1. **Require hook patching**: Intercepts `require()` calls to patch the middleware module when it's loaded
+2. **Cache patching**: Also patches the module if already in require cache
+3. **Tenant resolution**: Reads `x-tenant-id` header and resolves tenant from database
+4. **Search path setting**: Sets PostgreSQL search_path on the scoped Knex connection before the original middleware runs
+
+```typescript
+// instrumentation.ts - key changes
+function createTenantAwareMiddleware(originalMiddleware: any) {
+  return async function(req: any, res: any, next: any) {
+    const tenantSlug = req.headers?.['x-tenant-id']
+
+    if (!tenantSlug) {
+      return originalMiddleware(req, res, next)  // Use public schema
+    }
+
+    // Resolve tenant from database
+    const tenant = await resolveTenantBySlugDirect(tenantSlug)
+
+    // Set search_path BEFORE validating API key
+    const pgConnection = req.scope?.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+    await pgConnection.raw(`SET search_path TO "${tenant.schemaName}", public`)
+
+    // Run original middleware within tenant context
+    return runWithTenant(tenant, () => originalMiddleware(req, res, next))
+  }
+}
+```
+
+### Key Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/instrumentation.ts` | Added middleware patching, enhanced debug logging |
+| `src/api/admin/tenants/route.ts` | Removed `api_key` from EXCLUDED_TABLES (keys are now tenant-specific) |
+
+### Verification
+```bash
+# Test API key validation with tenant header
+curl -X GET 'https://admin.radicalz.io/store/products' \
+  -H 'x-publishable-api-key: pk_8a1c...' \
+  -H 'x-tenant-id: yum'
+
+# Returns: {"products":[],"count":0,"offset":0,"limit":50}
+```
+
+Logs show successful tenant resolution:
+```
+[tenant-instrumentation] Resolved tenant: yum -> schema tenant_yum
+[tenant-instrumentation] Set search_path to tenant_yum on scoped connection
+```
+
+### Important: API Keys Are Now Tenant-Specific
+Unlike the initial workaround that put API keys in the public schema, this fix keeps API keys in tenant schemas. Each tenant has their own publishable API keys that don't leak between tenants.
+
+**Secret API keys already worked** because they're validated via `apiKeyModule.authenticate()` which runs AFTER custom middlewares when tenant context is set.
+
+---
+
+## Drinkyum Account & Auth Pages (Jan 2, 2026)
+
+### Overview
+Built a complete set of 16 account and authentication pages for the Drinkyum storefront following the existing dark theme design system with yum-pink (#E1258F) accent color.
+
+### Pages Created
+
+**Authentication Pages (4):**
+| Page | Route | Description |
+|------|-------|-------------|
+| Login | `/login` | Email/password form with password toggle, error handling, return URL support |
+| Register | `/register` | Registration with password validation (8+ chars, number, uppercase), terms acceptance |
+| Forgot Password | `/forgot-password` | Password reset request form with success confirmation |
+| Reset Password | `/reset-password?token=xxx` | Token-based password reset with validation |
+
+**Account Pages (11):**
+| Page | Route | Description |
+|------|-------|-------------|
+| Dashboard | `/account` | Summary cards (orders, subscriptions, total spent), recent orders preview |
+| Profile | `/account/profile` | Edit first/last name, phone (email read-only) |
+| Change Password | `/account/password` | Current/new password form with validation |
+| Orders List | `/account/orders` | Paginated order history with search and status badges |
+| Order Detail | `/account/orders/[id]` | Full order info, items, shipping, tracking, return button |
+| Addresses | `/account/addresses` | Address cards with add/edit modal, default shipping/billing badges |
+| Subscriptions List | `/account/subscriptions` | S&S subscription cards with status, frequency, discount |
+| Subscription Detail | `/account/subscriptions/[id]` | Manage subscription: pause, resume, skip, cancel, change frequency |
+| Returns | `/account/returns` | Return request history with status tracking |
+
+**Other Pages (2):**
+| Page | Route | Description |
+|------|-------|-------------|
+| Order Confirmation | `/order/[id]/confirmed` | Post-purchase success page with order summary |
+| Verify Email | `/verify-email?token=xxx` | Email verification handler with resend option |
+| Search | `/search` | Product search with grid results and add-to-cart |
+
+### Shared Components Created
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| AccountLayout | `src/components/account/AccountLayout.tsx` | Wrapper with auth protection, page title, sidebar integration |
+| AccountSidebar | `src/components/account/AccountSidebar.tsx` | Desktop sidebar + mobile horizontal tabs navigation |
+
+### Design System Applied
+
+All pages follow the existing Drinkyum design patterns:
+- Dark theme with `bg-yum-dark` (#080808)
+- Primary accent `yum-pink` (#E1258F)
+- Secondary accent `yum-cyan` (#00B8E4)
+- Glassmorphism containers: `rgba(255,255,255,0.03)` with `rgba(255,255,255,0.08)` border
+- Framer Motion animations (fade, slide, scale)
+- Form inputs: `rounded-xl bg-white/5 border-white/10 focus:border-yum-pink`
+- Button gradient: `linear-gradient(135deg, #E1258F 0%, #C01F7A 100%)`
+
+### API Integration
+
+All pages use the existing API layer in `src/lib/`:
+- `auth.ts` - login, register, password reset, verify email
+- `orders.ts` - order history, order details, returns
+- `addresses.ts` - address CRUD with US states dropdown
+- `subscriptions.ts` - S&S subscription management
+- `products.ts` - product search
+
+### Auth Protection Pattern
+
+```typescript
+// Used in AccountLayout.tsx
+const { isAuthenticated, isLoading } = useAuth()
+const router = useRouter()
+const pathname = usePathname()
+
+useEffect(() => {
+  if (!isLoading && !isAuthenticated) {
+    router.push(`/login?returnUrl=${encodeURIComponent(pathname)}`)
+  }
+}, [isAuthenticated, isLoading, router, pathname])
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/app/login/page.tsx` | Login page |
+| `src/app/register/page.tsx` | Register page |
+| `src/app/forgot-password/page.tsx` | Password reset request |
+| `src/app/reset-password/page.tsx` | Password reset with token |
+| `src/app/verify-email/page.tsx` | Email verification |
+| `src/app/account/page.tsx` | Account dashboard |
+| `src/app/account/profile/page.tsx` | Profile settings |
+| `src/app/account/password/page.tsx` | Change password |
+| `src/app/account/orders/page.tsx` | Orders list |
+| `src/app/account/orders/[id]/page.tsx` | Order detail |
+| `src/app/account/addresses/page.tsx` | Address management |
+| `src/app/account/subscriptions/page.tsx` | Subscriptions list |
+| `src/app/account/subscriptions/[id]/page.tsx` | Subscription detail |
+| `src/app/account/returns/page.tsx` | Returns list |
+| `src/app/order/[id]/confirmed/page.tsx` | Order confirmation |
+| `src/app/search/page.tsx` | Product search |
+| `src/components/account/AccountLayout.tsx` | Account layout wrapper |
+| `src/components/account/AccountSidebar.tsx` | Navigation component |
